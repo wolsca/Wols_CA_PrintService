@@ -29,7 +29,7 @@ sudo apt install -y git python3 python3-venv python3-pip
 
 ### 2. Clone and Install
 ```bash
-git clone https://github.com/<user>/Wols_CA_PrintService.git /usr/local/src/wolsca-print-service
+git clone https://github.com/wolsca/Wols_CA_PrintService.git /usr/local/src/wolsca-print-service
 cd /usr/local/src/wolsca-print-service
 sudo ./deploy/debian/install.sh --with-cups
 ```
