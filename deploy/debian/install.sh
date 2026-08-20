@@ -94,6 +94,7 @@ chmod 2775 "${SPOOL_DIR}"
 
 echo "==> 4/7 Copying application files"
 install -o root -g root -m 0644 "${SRC_DIR}/config.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/diagnostics.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/hardware_dispatcher.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/installer.py" "${INSTALL_DIR}/"

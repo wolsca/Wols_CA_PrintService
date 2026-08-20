@@ -76,6 +76,7 @@ Wols_CA_PrintService/
     hardware_dispatcher.py      Raw TCP and CUPS dispatch
     file_watcher.py             Directory monitoring
     web_app.py                  Mobile interface hosting
+    diagnostics.py              Self-test phases, command logging and MQTT report
     web_strings.json            UI translations
     WolsCAPrintService.json     Runtime configuration (development)
 ---
@@ -156,12 +157,73 @@ The web app is available at `http://<server>.local:8080/`. It uses mDNS/Bonjour 
 -   `POST /api/options`: Set personal job options. Body: `{"printer": "<id>", "print_mode": "Booklet", "copies": 2}`.
 -   `POST /api/printer`: Set personal printer choice only. Body: `{"printer": "<id>"}`.
 -   `POST /api/default`: Set admin default printer. Body: `{"printer": "<id>", "token": "<admin_token>"}`.
+-   `GET /api/diagnostics`: Returns the last self-test report (without the individual steps).
+-   `POST /api/diagnostics/run`: Starts a self-test. Optional `?phases=cups,printer` selects phases.
 -   `GET /qr`: Page showing a QR code for the web app URL.
 -   `GET /healthz`: Liveness check.
 
 **Example `curl` call:**
 ```bash
 curl -X POST http://print.local:8080/api/resume
+```
+
+---
+
+## Self-Test / Diagnostics Report
+
+`diagnostics.py` is a test module that walks through the print chain phase by phase.
+Every single Debian command it runs is logged **together with its output**, both to the
+service log and to MQTT, and the whole run is aggregated into one report.
+
+### Phases
+
+| Phase | What it checks |
+| :--- | :--- |
+| `system` | `uname -a`, `/etc/os-release`, `systemctl is-active` for the service, CUPS and Avahi, `df -h /var/spool`, `id -a`. |
+| `config` | Config file, drop/temp/error directories and their permissions, `ls -laR` of the drop folder, the resolved printer target and the intake queues. |
+| `cups` | `lpstat -t/-d/-o`, the sharing directives in `cupsd.conf`, all `cups-pdf*.conf` output paths, `cups-pdf_log`, `error_log`, and whether every configured queue really exists. |
+| `printer` | Ping of the printer, `ipptool get-printer-attributes` against `hardware.printer_uri`, `lpstat -v` and the details of the output queue. |
+| `network` | TCP reachability of the MQTT broker, MQTT connection state, the web app port, `avahi-browse -rt _ipp._tcp`, `ss -ltnp`. |
+| `chain` | End to end: submits a real job with `lp`, then waits up to 40 s for `cups-pdf` to drop a PDF in the watched folder, plus `lpstat -W completed -o` and the last service log lines. Not part of the default run because it prints. |
+
+Each step gets a status: `PASS`, `FAIL`, `WARN` (optional check), `SKIP` (tool not installed) or `INFO`.
+
+### How to start it
+
+```bash
+# command line (default phases)
+sudo WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json \
+     /opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/main.py --self-test
+
+# selected phases, or every phase including the test print
+... main.py --self-test cups,printer
+... main.py --self-test --all
+```
+
+The exit code is `0` when nothing failed, `1` otherwise, so it can be used in a cron job.
+
+- **Web app**: the *Service self-test* card has *Run self-test* and *Run self-test including a test print* buttons and shows the report inline.
+- **Home Assistant**: press the *Run Print Service Self-Test* or *Run Print Service Chain Test* button.
+- **MQTT**: publish `SELFTEST`, `SELFTEST_CHAIN` or `SELFTEST:cups,printer` to `<topic_prefix>/command`.
+
+### MQTT topics and Home Assistant entities
+
+| Topic | Content |
+| :--- | :--- |
+| `<prefix>/diagnostics/step` | One JSON message per step: phase, title, the exact command line, exit code, status and (truncated) output. |
+| `<prefix>/diagnostics/report` | Retained aggregated report: `result`, `summary`, counters, `failed_steps`, `markdown` and all `steps`. |
+| `<prefix>/diagnostics/state` | `running` while a test is in progress, then the result. |
+
+Auto-discovered entities: `sensor.print_service_self_test` (state = `PASS`/`WARN`/`FAIL`, the full
+report in its attributes), `sensor.print_service_self_test_summary`,
+`sensor.print_service_self_test_failures` and the two run buttons.
+
+A markdown card renders the whole report:
+
+```yaml
+type: markdown
+content: |
+  {{ state_attr('sensor.print_service_self_test', 'markdown') }}
 ```
 
 ---

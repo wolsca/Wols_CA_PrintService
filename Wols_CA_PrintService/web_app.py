@@ -124,6 +124,9 @@ button.ghost { background: transparent; color: #2f80ed; border: 1px solid #c7ccd
 button.danger { background: transparent; color: #eb5757; border: 1px solid #eb5757; min-height: 48px; font-size: 17px; margin-top: 8px; }
 select { width: 100%; min-height: 48px; font-size: 17px; border-radius: 10px; padding: 8px; border: 1px solid #c7ccd1; margin-bottom: 10px; }
 .row { display: flex; justify-content: space-between; padding: 4px 0; }
+pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.35 ui-monospace, monospace; max-height: 340px; overflow: auto; margin: 10px 0 0; }
+.tag { display: inline-block; border-radius: 8px; padding: 2px 8px; font-size: 14px; font-weight: 600; color: #fff; background: #7b8794; }
+.tag.pass { background: #27ae60; } .tag.fail { background: #eb5757; } .tag.warn { background: #f2994a; }
 </style>
 </head>
 <body>
@@ -141,6 +144,14 @@ select { width: 100%; min-height: 48px; font-size: 17px; border-radius: 10px; pa
   <button class="ghost" id="reprint"></button>
   <button class="danger" id="cancel"></button>
 </div>
+<div class="card" id="testCard">
+  <div class="row"><span id="lblTest" class="state" style="font-size:18px"></span><span class="tag" id="testResult">-</span></div>
+  <p id="testSummary" class="muted"></p>
+  <button class="ghost" id="runTest"></button>
+  <button class="ghost" id="runChainTest"></button>
+  <button class="ghost" id="toggleTest"></button>
+  <pre id="testReport" hidden></pre>
+</div>
 <script>
 var T = __STRINGS__;
 var byId = function(id) { return document.getElementById(id); };
@@ -150,6 +161,10 @@ byId("lblPrinter").textContent = T.printingOn || "Printer";
 byId("resume").textContent = T.continueButton || "CONTINUE";
 byId("reprint").textContent = T.reprintButton || "Reprint";
 byId("cancel").textContent = T.cancelButton || "Cancel";
+byId("lblTest").textContent = T.selfTestTitle || "Self-test";
+byId("runTest").textContent = T.selfTestRun || "Run self-test";
+byId("runChainTest").textContent = T.selfTestRunChain || "Run self-test incl. test print";
+byId("toggleTest").textContent = T.selfTestShow || "Show report";
 
 function render(s) {
   var st = s.state;
@@ -174,12 +189,45 @@ function post(url) {
   fetch(url, {method: "POST"}).then(poll);
 }
 
+function renderTest(r) {
+  var tag = byId("testResult");
+  var result = r.running ? "RUNNING" : (r.result || "NONE");
+  tag.textContent = result;
+  tag.className = "tag " + (result === "PASS" ? "pass" : (result === "FAIL" ? "fail" : (result === "WARN" ? "warn" : "")));
+  byId("testSummary").textContent = r.running ? (T.selfTestRunning || "Running...")
+                                              : (r.summary ? r.summary + " - " + (r.finished || "") : (T.selfTestNever || "Not run yet"));
+  byId("testReport").textContent = r.markdown || "";
+  byId("runTest").disabled = !!r.running;
+  byId("runChainTest").disabled = !!r.running;
+}
+
+function pollTest() {
+  fetch("/api/diagnostics", {cache: "no-store"}).then(function(r) { return r.json(); }).then(renderTest).catch(function(){});
+}
+
+byId("runTest").onclick = function() {
+  post("/api/diagnostics/run");
+  setTimeout(pollTest, 500);
+};
+byId("runChainTest").onclick = function() {
+  if (!confirm(T.selfTestConfirmChain || "This sends a test page to the printer. Continue?")) return;
+  post("/api/diagnostics/run?phases=system,config,cups,printer,network,chain");
+  setTimeout(pollTest, 500);
+};
+byId("toggleTest").onclick = function() {
+  var pre = byId("testReport");
+  pre.hidden = !pre.hidden;
+  byId("toggleTest").textContent = pre.hidden ? (T.selfTestShow || "Show report") : (T.selfTestHide || "Hide report");
+};
+
 byId("resume").onclick = function() { post("/api/resume"); };
 byId("reprint").onclick = function() { post("/api/reprint"); };
 byId("cancel").onclick = function() { if(confirm(T.confirmCancel || "Cancel?")) post("/api/cancel"); };
 
 poll();
 setInterval(poll, 2000);
+pollTest();
+setInterval(pollTest, 4000);
 </script>
 </body>
 </html>
@@ -234,6 +282,16 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(data)
+        elif path == "/api/diagnostics":
+            import diagnostics
+            report = dict(diagnostics.last_report or {"result": "NONE"})
+            report.pop("steps", None)          # keep the payload small for the browser
+            report["running"] = diagnostics.run_lock.locked()
+            data = json.dumps(report).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self.send_response(404)
             self.end_headers()
@@ -248,6 +306,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
             mqtt_service.request_cancel()
         elif path == "/api/reprint":
             mqtt_service.request_reprint_front()
+        elif path == "/api/diagnostics/run":
+            import diagnostics
+            phases = parse_qs(urlparse(self.path).query).get("phases", [""])[0]
+            selected = [p.strip() for p in phases.split(",") if p.strip()] or None
+            print(f"[Web] Self-test requested ({selected or 'default phases'}).")
+            diagnostics.run_async(selected)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

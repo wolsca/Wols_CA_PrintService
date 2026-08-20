@@ -12,6 +12,7 @@ import pdf_processor
 import file_watcher
 import web_app
 import installer
+import diagnostics
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
@@ -203,8 +204,26 @@ def start_service():
     observer.join()
     mqtt_service.stop_mqtt()
 
+def run_self_test(argv):
+    """Runs the diagnostics phases and reports them to MQTT for Home Assistant."""
+    index = argv.index("--self-test")
+    selected = None
+    if len(argv) > index + 1 and not argv[index + 1].startswith("-"):
+        selected = [p.strip() for p in argv[index + 1].split(",") if p.strip()]
+    elif "--all" in argv:
+        selected = list(diagnostics.PHASES.keys())
+
+    mqtt_service.start_mqtt()
+    time.sleep(2.0)  # give the broker connection a chance before the first publish
+    report = diagnostics.run(selected)
+    time.sleep(1.0)  # let the retained report leave the client buffer
+    mqtt_service.stop_mqtt()
+    sys.exit(0 if report.get("failed", 1) == 0 else 1)
+
 if __name__ == "__main__":
     if "--install-printer" in sys.argv:
         installer.perform_cups_printer_install()
+    elif "--self-test" in sys.argv:
+        run_self_test(sys.argv)
     else:
         start_service()

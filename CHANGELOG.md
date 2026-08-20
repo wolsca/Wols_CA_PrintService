@@ -5,8 +5,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+### Added
+- Self-test / diagnostics module (`diagnostics.py`): runs the print chain phase by phase
+  (`system`, `config`, `cups`, `printer`, `network`, and the optional `chain` test print) and logs
+  every Debian command together with its exit code and output.
+  - Each step is published to `<prefix>/diagnostics/step`; the aggregated report (counters,
+    failed steps and a ready-made markdown summary) is published retained to
+    `<prefix>/diagnostics/report`, with the run state on `<prefix>/diagnostics/state`.
+  - Home Assistant auto-discovery for the result, summary and failure-count sensors plus two
+    buttons ("Run Print Service Self-Test" and "Run Print Service Chain Test").
+  - Can be started from the web app ("Service self-test" card), from Home Assistant, over MQTT
+    (`SELFTEST`, `SELFTEST_CHAIN`, `SELFTEST:cups,printer`) or from the command line
+    (`main.py --self-test [phases|--all]`, exit code 1 when a step failed).
+  - New endpoints `GET /api/diagnostics` and `POST /api/diagnostics/run`.
+
 ### Changed
 Refactored the monolithic Wols_CA_PrintService.py script into a highly readable, modular architecture (main.py, pdf_processor.py, etc.) for improved maintainability.
+
+### Fixed
+- CI: the workflow still byte-compiled the removed monolithic `Wols_CA_PrintService.py`, so every
+  push failed. It now compiles the whole package, imports all modules and runs the offline
+  self-test phases.
 
 ### Fixed
 - Jobs disappeared silently ("printers visible, nothing prints"):

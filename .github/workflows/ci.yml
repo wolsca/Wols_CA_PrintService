@@ -22,7 +22,21 @@ jobs:
           pip install -r requirements.txt
 
       - name: Byte-compile the service
-        run: python -m py_compile Wols_CA_PrintService/Wols_CA_PrintService.py
+        run: python -m compileall -q Wols_CA_PrintService
+
+      - name: Import every module
+        working-directory: Wols_CA_PrintService
+        env:
+          WOLSCA_CONFIG: ${{ runner.temp }}/WolsCAPrintService.json
+        run: |
+          python -c "import config, mqtt_service, diagnostics, file_watcher, hardware_dispatcher, pdf_processor, web_app, installer, main"
+
+      - name: Run the offline self-test phases
+        working-directory: Wols_CA_PrintService
+        env:
+          WOLSCA_CONFIG: ${{ runner.temp }}/WolsCAPrintService.json
+        run: |
+          python -c "import diagnostics; r = diagnostics.run(['system', 'config'], publish=False); print(r['summary'])"
 
       - name: Validate the shipped configuration files
         run: |

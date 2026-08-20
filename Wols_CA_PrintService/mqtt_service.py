@@ -119,6 +119,13 @@ def publish_ha_discovery():
     }
     mqtt_client.publish(f"{HA_PREFIX}/button/wolsca_print/cancel/config", json.dumps(config_cancel), retain=True)
 
+    # Imported late: diagnostics imports this module.
+    try:
+        import diagnostics
+        diagnostics.publish_ha_discovery()
+    except Exception as e:
+        print(f"[Warning] Could not publish the diagnostics discovery: {e}")
+
 def set_state(state, detail="", pending_count=0, **fields):
     """Updates the global job state and publishes it to MQTT."""
     with state_lock:
@@ -201,6 +208,18 @@ def on_message(client, userdata, msg):
         print("[System] 'REPRINT' command received via MQTT.")
         publish_log("Reprint command received via MQTT.", "info")
         request_reprint_front()
+
+    elif topic == f"{PREFIX}/command" and payload.startswith("SELFTEST"):
+        # SELFTEST, SELFTEST_CHAIN or SELFTEST:cups,printer
+        import diagnostics
+        if payload == "SELFTEST_CHAIN":
+            phases = diagnostics.DEFAULT_PHASES + ["chain"]
+        elif ":" in payload:
+            phases = [p.strip() for p in payload.split(":", 1)[1].split(",") if p.strip()]
+        else:
+            phases = None
+        print(f"[System] 'SELFTEST' command received via MQTT ({phases or 'default phases'}).")
+        diagnostics.run_async(phases)
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
