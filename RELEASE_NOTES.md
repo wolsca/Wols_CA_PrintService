@@ -2,7 +2,7 @@
 
 ## 1.0.0 - 2026-08-20
 
-First public release of the **Wols CA Double Sided Print Service**.
+First public release of the **Wols CA Print Service**.
 
 A Python print service that watches a drop folder for PDFs, imposes them into A5 booklets on
 A4 paper and manages the double-sided printing process. It ships with a built-in mobile web
@@ -62,8 +62,8 @@ IPP URI). See `docs/USER_GUIDE.md` for step-by-step instructions per device.
 
 ### Configuration
 
-Configuration lives in `/etc/wolsca/WolsCADoubleSided.json` on Linux (or
-`WolsCADoubleSided.json` in the project root for development) with `mqtt`, `paths`, `intake`,
+Configuration lives in `/etc/wolsca/WolsCAPrintService.json` on Linux (or
+`WolsCAPrintService.json` in the project root for development) with `mqtt`, `paths`, `intake`,
 `hardware`, `printers`, `web`, `notify`, `history` and `settings` sections. Restart the
 service after editing:
 
@@ -96,6 +96,26 @@ Options precedence: **intake queue** > **personal choice** (web app, TTL
 - If the installer is run without `--with-cups`, only one queue is created.
 - mDNS (`.local`) is not always reliable over VPN, guest VLANs or on some Android builds; a
   stable name in your own DNS server (for example `print.home.lan`) is recommended.
+
+### Naming change
+
+The project was renamed from **Wols CA Double Sided Print Service** to **Wols CA Print Service**,
+because it handles booklet, duplex and simplex printing and not only double-sided output. This
+affects file and directory names as well as the configuration file:
+
+| Old | New |
+| --- | --- |
+| `Wols_CA_Double_Sided_Print_Service/` | `Wols_CA_PrintService/` |
+| `Wols_CA_Double_Sided_Print_Service.py` | `Wols_CA_PrintService.py` |
+| `Wols_CA_Double_Sided_Print_Service.slnx` / `.pyproj` | `Wols_CA_PrintService.slnx` / `.pyproj` |
+| `WolsCADoubleSided.json` | `WolsCAPrintService.json` |
+| `WolsCADoubleSided.linux.json` | `WolsCAPrintService.linux.json` |
+
+Upgrading an existing installation: rename `/etc/wolsca/WolsCADoubleSided.json` to
+`/etc/wolsca/WolsCAPrintService.json` (or point `WOLSCA_CONFIG` at the old file) before
+restarting `wolsca-print-service`. The systemd unit name (`wolsca-print-service`), the CUPS
+queue names (`WolsCA_Booklet`, `WolsCA_DoubleSided`, `WolsCA_SingleSided`) and the spool
+directories are unchanged, so clients do not have to be reconfigured.
 
 ### Documentation
 

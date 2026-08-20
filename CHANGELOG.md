@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Changed
+- Renamed the project from "Wols CA Double Sided Print Service" to "Wols CA Print Service":
+  - Source folder and script: `Wols_CA_PrintService/Wols_CA_PrintService.py`.
+  - Project files: `Wols_CA_PrintService.slnx` / `.pyproj`.
+  - Configuration files: `WolsCADoubleSided.json` -> `WolsCAPrintService.json` and
+    `WolsCADoubleSided.linux.json` -> `WolsCAPrintService.linux.json`.
+  - Upgrade note: rename `/etc/wolsca/WolsCADoubleSided.json` to `/etc/wolsca/WolsCAPrintService.json`
+    (or set `WOLSCA_CONFIG`) before restarting the service.
+  - The systemd unit name, CUPS queue names and spool directories are unchanged.
+
 ## [1.4.0] - 2026-08-20
 ### Added
 - "Choose the print mode in the print dialog" workflow:

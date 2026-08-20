@@ -41,7 +41,7 @@ except Exception:
 # ============================================================================
 # 1. CONFIGURATION MANAGEMENT (JSON)
 # ============================================================================
-CONFIG_FILE = "WolsCADoubleSided.json"
+CONFIG_FILE = "WolsCAPrintService.json"
 # System wide location used by the Debian/systemd deployment.
 SYSTEM_CONFIG_DIR = "/etc/wolsca"
 config = {}
@@ -2031,7 +2031,7 @@ def check_cups_queue():
         result = subprocess.run(["lpstat", "-p", queue_name], capture_output=True, text=True)
         if result.returncode != 0:
             print(f"[Zero-Touch] CUPS queue '{queue_name}' not found.")
-            print("[Zero-Touch] Run 'sudo <python> Wols_CA_Double_Sided_Print_Service.py "
+            print("[Zero-Touch] Run 'sudo <python> Wols_CA_PrintService.py "
                   "--install-printer' to create it.")
         else:
             print(f"[Zero-Touch] CUPS queue '{queue_name}' is available.")
@@ -2363,7 +2363,7 @@ def start_service():
     observer.start()
 
     print("\n===================================================")
-    print(f"  Wols CA Double Sided Print Service {SERVICE_VERSION} started!")
+    print(f"  Wols CA Print Service {SERVICE_VERSION} started!")
     print("  Booklet imposition, web app, push notifications    ")
     print(f"  OS Detected: {platform.system()}")
     print(f"  Default printer: {default_printer()['name']}")

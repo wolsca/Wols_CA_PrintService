@@ -1,4 +1,4 @@
-# User Guide: Wols CA Double Sided Print Service
+# User Guide: Wols CA Print Service
 
 This guide explains how to use the Wols CA Booklet Printing service from your devices. The service allows you to print PDFs as A5 booklets on A4 paper. It handles the imposition (reordering pages) and prompts you to flip the paper halfway through.
 

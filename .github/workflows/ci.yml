@@ -22,12 +22,12 @@ jobs:
           pip install -r requirements.txt
 
       - name: Byte-compile the service
-        run: python -m py_compile Wols_CA_Double_Sided_Print_Service/Wols_CA_Double_Sided_Print_Service.py
+        run: python -m py_compile Wols_CA_PrintService/Wols_CA_PrintService.py
 
       - name: Validate the shipped configuration files
         run: |
-          python -c "import json; json.load(open('Wols_CA_Double_Sided_Print_Service/WolsCADoubleSided.json'))"
-          python -c "import json; json.load(open('deploy/debian/WolsCADoubleSided.linux.json'))"
+          python -c "import json; json.load(open('Wols_CA_PrintService/WolsCAPrintService.json'))"
+          python -c "import json; json.load(open('deploy/debian/WolsCAPrintService.linux.json'))"
 
   shell:
     name: Shell scripts

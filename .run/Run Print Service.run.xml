@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Run Print Service" type="ShConfigurationType">
-    <option name="SCRIPT_TEXT" value="python Wols_CA_Double_Sided_Print_Service.py" />
+    <option name="SCRIPT_TEXT" value="python Wols_CA_PrintService.py" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
     <option name="SCRIPT_PATH" value="" />
     <option name="SCRIPT_OPTIONS" value="" />
@@ -9,7 +9,7 @@
     <option name="INTERPRETER_OPTIONS" value="-NoProfile -Command" />
     <option name="EXECUTE_IN_TERMINAL" value="true" />
     <option name="EXECUTE_SCRIPT_FILE" value="false" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/Wols_CA_Double_Sided_Print_Service" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/Wols_CA_PrintService" />
     <envs />
     <method v="2" />
   </configuration>

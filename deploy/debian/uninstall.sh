@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Removes the Wols CA Double Sided Print Service from a Debian/Ubuntu host.
+# Removes the Wols CA Print Service from a Debian/Ubuntu host.
 # Configuration (/etc/wolsca) and spooled files (/var/spool/wolsca) are kept
 # unless --purge is given.
 #
@@ -43,7 +43,7 @@ fi
 
 if [[ "${PURGE}" == "yes" ]]; then
     echo "==> Purging configuration, spool directories and the CUPS queues"
-    QUEUES="$(python3 - "$CONFIG_DIR/WolsCADoubleSided.json" <<'PY' 2>/dev/null || true
+    QUEUES="$(python3 - "$CONFIG_DIR/WolsCAPrintService.json" <<'PY' 2>/dev/null || true
 import json, sys
 try:
     with open(sys.argv[1]) as f:

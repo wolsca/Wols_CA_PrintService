@@ -1,4 +1,4 @@
-# Wols CA Double Sided Print Service
+# Wols CA Print Service
 
 A Python print service that watches a drop folder for PDFs, imposes them into A5 booklets on A4 paper, and manages the double-sided printing process. It includes a built-in mobile web app and MQTT integration for Home Assistant.
 
@@ -29,7 +29,7 @@ sudo apt install -y git python3 python3-venv python3-pip
 
 ### 2. Clone and Install
 ```bash
-git clone https://github.com/<user>/Wols_CA_Double_Sided_Print_Service.git /usr/local/src/wolsca-print-service
+git clone https://github.com/<user>/Wols_CA_PrintService.git /usr/local/src/wolsca-print-service
 cd /usr/local/src/wolsca-print-service
 sudo ./deploy/debian/install.sh --with-cups
 ```
@@ -56,11 +56,11 @@ If you prefer to run the service from source or on Windows:
     pip install -r requirements.txt
     ```
 2.  **Install Virtual Printer**:
-    - **Linux**: `sudo python3 Wols_CA_Double_Sided_Print_Service.py --install-printer`
-    - **Windows**: Run the script with Administrative privileges: `python Wols_CA_Double_Sided_Print_Service.py --install-printer`. This downloads and configures PDFCreator.
+    - **Linux**: `sudo python3 Wols_CA_PrintService.py --install-printer`
+    - **Windows**: Run the script with Administrative privileges: `python Wols_CA_PrintService.py --install-printer`. This downloads and configures PDFCreator.
 3.  **Run Service**:
     ```bash
-    python3 Wols_CA_Double_Sided_Print_Service.py
+    python3 Wols_CA_PrintService.py
     ```
 
 ---
@@ -79,7 +79,7 @@ Instead of one intake queue, there are three shared CUPS queues. The queue a doc
 
 ## Configuration
 
-The configuration is stored in `/etc/wolsca/WolsCADoubleSided.json` (Linux) or `WolsCADoubleSided.json` (root folder). **Restart the service after editing.**
+The configuration is stored in `/etc/wolsca/WolsCAPrintService.json` (Linux) or `WolsCAPrintService.json` (root folder). **Restart the service after editing.**
 
 ```bash
 sudo systemctl restart wolsca-print-service
@@ -310,10 +310,10 @@ docs/USER_GUIDE.md                              Per-device usage guide
 deploy/debian/                                  Debian/Ubuntu deployment (systemd, CUPS, Avahi)
     install.sh / uninstall.sh                   Installer and remover
     wolsca-print-service.service                systemd unit
-    WolsCADoubleSided.linux.json                Default Linux configuration
-Wols_CA_Double_Sided_Print_Service/
-    Wols_CA_Double_Sided_Print_Service.py       The service (watcher, imposition, web app)
-    WolsCADoubleSided.json                      Runtime configuration (development)
+    WolsCAPrintService.linux.json                Default Linux configuration
+Wols_CA_PrintService/
+    Wols_CA_PrintService.py       The service (watcher, imposition, web app)
+    WolsCAPrintService.json                      Runtime configuration (development)
 ```
 
 ## Development in CLion

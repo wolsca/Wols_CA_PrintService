@@ -59,7 +59,7 @@ What the installer does:
 3. creates `/var/spool/wolsca/{PrintFileDrop,PrintTemp,PrintError}` (setgid `lp`,
    so both cups-pdf and the service can write there);
 4. copies the service to `/opt/wolsca-print-service` and the default config to
-   `/etc/wolsca/WolsCADoubleSided.json`;
+   `/etc/wolsca/WolsCAPrintService.json`;
 5. builds `/opt/wolsca-print-service/venv` and installs `requirements.txt`;
 6. with `--with-cups`: installs CUPS, cups-pdf, `cups-ipp-utils` and Avahi,
    redirects the cups-pdf output to the drop directory, creates the shared queue
@@ -72,14 +72,14 @@ What the installer does:
 Omit `--with-cups` if you want to set the queue up later:
 
 ```bash
-sudo WOLSCA_CONFIG=/etc/wolsca/WolsCADoubleSided.json \
+sudo WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json \
      /opt/wolsca-print-service/venv/bin/python \
-     /opt/wolsca-print-service/Wols_CA_Double_Sided_Print_Service.py --install-printer
+     /opt/wolsca-print-service/Wols_CA_PrintService.py --install-printer
 ```
 
 ## 4. Configure
 
-Edit `/etc/wolsca/WolsCADoubleSided.json` (MQTT broker/credentials, the physical printers, the print mode, and notifications) and restart:
+Edit `/etc/wolsca/WolsCAPrintService.json` (MQTT broker/credentials, the physical printers, the print mode, and notifications) and restart:
 
 ```bash
 sudo systemctl restart wolsca-print-service

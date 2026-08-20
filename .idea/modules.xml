@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Wols_CA_Double_Sided_Print_Service.iml" filepath="$PROJECT_DIR$/.idea/Wols_CA_Double_Sided_Print_Service.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/Wols_CA_PrintService.iml" filepath="$PROJECT_DIR$/.idea/Wols_CA_PrintService.iml" />
     </modules>
   </component>
 </project>

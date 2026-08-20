@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Wols CA Double Sided Print Service - Debian / Ubuntu installer.
+# Wols CA Print Service - Debian / Ubuntu installer.
 #
 # Installs the service into /opt/wolsca-print-service with its own virtualenv,
 # deploys the configuration to /etc/wolsca, creates the spool directories and
@@ -43,7 +43,7 @@ if [[ -r /etc/os-release ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SRC_DIR="${REPO_ROOT}/Wols_CA_Double_Sided_Print_Service"
+SRC_DIR="${REPO_ROOT}/Wols_CA_PrintService"
 
 echo "==> 1/7 Installing OS packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -86,16 +86,16 @@ chmod 2775 "${SPOOL_DIR}"
 
 echo "==> 4/7 Copying application files"
 install -o root -g root -m 0644 \
-    "${SRC_DIR}/Wols_CA_Double_Sided_Print_Service.py" "${INSTALL_DIR}/"
+    "${SRC_DIR}/Wols_CA_PrintService.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${REPO_ROOT}/requirements.txt" "${INSTALL_DIR}/"
 
-if [[ ! -f "${CONFIG_DIR}/WolsCADoubleSided.json" ]]; then
+if [[ ! -f "${CONFIG_DIR}/WolsCAPrintService.json" ]]; then
     install -o root -g "${SERVICE_USER}" -m 0640 \
-        "${REPO_ROOT}/deploy/debian/WolsCADoubleSided.linux.json" \
-        "${CONFIG_DIR}/WolsCADoubleSided.json"
-    echo "    Installed default configuration - review ${CONFIG_DIR}/WolsCADoubleSided.json"
+        "${REPO_ROOT}/deploy/debian/WolsCAPrintService.linux.json" \
+        "${CONFIG_DIR}/WolsCAPrintService.json"
+    echo "    Installed default configuration - review ${CONFIG_DIR}/WolsCAPrintService.json"
 else
-    echo "    Existing configuration kept: ${CONFIG_DIR}/WolsCADoubleSided.json"
+    echo "    Existing configuration kept: ${CONFIG_DIR}/WolsCAPrintService.json"
 fi
 
 echo "==> 5/7 Creating the Python virtualenv"
@@ -110,9 +110,9 @@ fi
 
 if [[ "${WITH_CUPS}" == "yes" ]]; then
     echo "==> 6/7 Deploying the CUPS intake printers (cups-pdf, one per print mode)"
-    WOLSCA_CONFIG="${CONFIG_DIR}/WolsCADoubleSided.json" \
+    WOLSCA_CONFIG="${CONFIG_DIR}/WolsCAPrintService.json" \
         "${INSTALL_DIR}/venv/bin/python" \
-        "${INSTALL_DIR}/Wols_CA_Double_Sided_Print_Service.py" --install-printer
+        "${INSTALL_DIR}/Wols_CA_PrintService.py" --install-printer
 else
     echo "==> 6/7 Skipping CUPS setup (pass --with-cups to enable)"
 fi
@@ -125,7 +125,7 @@ systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
 systemctl restart "${SERVICE_NAME}.service"
 
-WEB_PORT="$(python3 - "${CONFIG_DIR}/WolsCADoubleSided.json" <<'PY' 2>/dev/null || echo 8080
+WEB_PORT="$(python3 - "${CONFIG_DIR}/WolsCAPrintService.json" <<'PY' 2>/dev/null || echo 8080
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -146,7 +146,7 @@ echo
 echo "Installation complete."
 echo "  Status:  systemctl status ${SERVICE_NAME}"
 echo "  Logs:    journalctl -u ${SERVICE_NAME} -f"
-echo "  Config:  ${CONFIG_DIR}/WolsCADoubleSided.json"
+echo "  Config:  ${CONFIG_DIR}/WolsCAPrintService.json"
 echo "  Web app: http://$(hostname).local:${WEB_PORT}/"
 echo "  QR code: http://$(hostname).local:${WEB_PORT}/qr"
 echo "  Print to (booklet)     : ipp://$(hostname).local:631/printers/WolsCA_Booklet"

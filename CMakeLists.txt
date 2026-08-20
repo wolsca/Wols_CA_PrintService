@@ -3,11 +3,11 @@ cmake_minimum_required(VERSION 3.20)
 # The project is pure Python, so no compiler/toolchain is required.
 # CMake is used only as the project model so that CLion can load the sources
 # and provide ready-to-use run targets.
-project(Wols_CA_Double_Sided_Print_Service LANGUAGES NONE)
+project(Wols_CA_PrintService LANGUAGES NONE)
 
-set(SERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Wols_CA_Double_Sided_Print_Service")
-set(SERVICE_SCRIPT "${SERVICE_DIR}/Wols_CA_Double_Sided_Print_Service.py")
-set(SERVICE_CONFIG "${SERVICE_DIR}/WolsCADoubleSided.json")
+set(SERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Wols_CA_PrintService")
+set(SERVICE_SCRIPT "${SERVICE_DIR}/Wols_CA_PrintService.py")
+set(SERVICE_CONFIG "${SERVICE_DIR}/WolsCAPrintService.json")
 
 if (WIN32)
     set(PYTHON_EXECUTABLE_NAME "python" CACHE STRING "Python interpreter used to run the service")
@@ -29,7 +29,7 @@ add_custom_target(sources SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/deploy/debian/install.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}/deploy/debian/uninstall.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}/deploy/debian/wolsca-print-service.service"
-        "${CMAKE_CURRENT_SOURCE_DIR}/deploy/debian/WolsCADoubleSided.linux.json")
+        "${CMAKE_CURRENT_SOURCE_DIR}/deploy/debian/WolsCAPrintService.linux.json")
 
 # Install the Python dependencies of the service.
 add_custom_target(install_requirements
@@ -42,7 +42,7 @@ add_custom_target(install_requirements
 add_custom_target(run_service
         COMMAND "${PYTHON_EXECUTABLE_NAME}" "${SERVICE_SCRIPT}"
         WORKING_DIRECTORY "${SERVICE_DIR}"
-        COMMENT "Starting Wols CA Double Sided Print Service"
+        COMMENT "Starting Wols CA Print Service"
         USES_TERMINAL VERBATIM)
 
 # Run the Windows-only zero-touch virtual printer deployment.

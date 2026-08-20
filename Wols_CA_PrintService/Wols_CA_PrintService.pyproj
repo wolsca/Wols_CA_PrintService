@@ -4,13 +4,13 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>d73a8de0-9944-45e1-9a26-71196a79e9ec</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>Wols_CA_Double_Sided_Print_Service.py</StartupFile>
+    <StartupFile>Wols_CA_PrintService.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
-    <Name>Wols_CA_Double_Sided_Print_Service</Name>
-    <RootNamespace>Wols_CA_Double_Sided_Print_Service</RootNamespace>
+    <Name>Wols_CA_PrintService</Name>
+    <RootNamespace>Wols_CA_PrintService</RootNamespace>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -21,10 +21,10 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Wols_CA_Double_Sided_Print_Service.py" />
+    <Compile Include="Wols_CA_PrintService.py" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="WolsCADoubleSided.json" />
+    <Content Include="WolsCAPrintService.json" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
