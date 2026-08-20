@@ -22,7 +22,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from pypdf import PdfReader, PdfWriter, PageObject, Transformation
 
-SERVICE_VERSION = "1.4.0"
+SERVICE_VERSION = "1.4.1"
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_LINUX = platform.system() == "Linux"
@@ -723,6 +723,18 @@ def publish_metrics(filename, page_count, mode, processing_time):
     }
     mqtt_client.publish(f"{PREFIX}/metrics", json.dumps(metrics))
 
+def publish_log(message, level="info"):
+    """Publishes a structured log event to the MQTT broker for external monitoring."""
+    try:
+        payload = json.dumps({
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "level": level,
+            "message": message
+        })
+        mqtt_client.publish(f"{PREFIX}/log", payload)
+    except Exception as e:
+        print(f"[Error] Failed to publish MQTT log: {e}")
+
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
         print(f"[MQTT] Successfully connected to broker at {MQTT_BROKER}")
@@ -731,6 +743,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe(f"{PREFIX}/settings/mode/set")
         client.subscribe(f"{PREFIX}/settings/printer/set")
         set_state("IDLE", "Service started and synchronized with HA.")
+        publish_log("Service started and synchronized with Home Assistant.", "info")
     else:
         print(f"[MQTT] Connection failed, return code {reason_code}")
 
@@ -742,14 +755,17 @@ def on_message(client, userdata, msg):
     if topic == f"{PREFIX}/command" and payload == "RESUME":
         if waiting_for_user_action:
             print("[System] 'RESUME' command received via MQTT. Continuing workflow...")
+            publish_log("Resume command received via MQTT. Continuing workflow.", "info")
             waiting_for_user_action = False
 
     elif topic == f"{PREFIX}/command" and payload == "CANCEL":
         print("[System] 'CANCEL' command received via MQTT.")
+        publish_log("Cancel command received via MQTT.", "warning")
         request_cancel()
 
     elif topic == f"{PREFIX}/command" and payload == "REPRINT":
         print("[System] 'REPRINT' command received via MQTT.")
+        publish_log("Reprint command received via MQTT.", "info")
         request_reprint_front()
 
     elif topic == f"{PREFIX}/settings/mode/set":
@@ -1103,6 +1119,7 @@ def wait_for_flip(filename, sheets, instruction):
               f"Front side done. Put the {sheets} sheet(s) back in the tray and press Continue.",
               side="front", flip_instruction=instruction, flip_deadline=deadline)
     notify_flip_required(filename, sheets, instruction)
+    publish_log(f"Waiting for manual flip for document '{filename}'.", "info")
 
     while waiting_for_user_action and not shutdown_event.is_set():
         if deadline and time.time() > deadline:
@@ -1116,6 +1133,7 @@ def wait_for_flip(filename, sheets, instruction):
         raise JobCancelled("Cancelled while waiting for the paper to be flipped.")
     if take_reprint_request():
         print("[System] Reprint of the front side requested.")
+        publish_log("Reprint of the front side was requested.", "info")
         return "reprint"
     return "resume"
 
@@ -1137,6 +1155,7 @@ def process_print_job(filepath, intake=None):
     filename = os.path.basename(filepath)
     print(f"\n--- NEW PRINT JOB DETECTED ---")
     print(f"[File] {filename}")
+    publish_log(f"New print job received: '{filename}' via {intake['cups_queue'] if intake else 'default drop'}.", "info")
 
     target, origin = resolve_target_printer()
     options = resolve_job_options()
@@ -1202,6 +1221,7 @@ def process_print_job(filepath, intake=None):
             proc_time_ms = int((time.time() - start_time) * 1000)
             publish_metrics(filename, pages, "Booklet", proc_time_ms)
             set_state("COMPLETED", f"Successfully processed {filename}", side=None)
+            publish_log(f"Successfully completed printing '{filename}' in Booklet mode.", "success")
 
         elif print_mode == "Duplex":
             # Forced double sided: no imposition, one page per side of a sheet.
@@ -1232,6 +1252,7 @@ def process_print_job(filepath, intake=None):
             proc_time_ms = int((time.time() - start_time) * 1000)
             publish_metrics(filename, pages, "Duplex", proc_time_ms)
             set_state("COMPLETED", f"Successfully processed {filename}", side=None)
+            publish_log(f"Successfully completed printing '{filename}' in Duplex mode.", "success")
 
         elif print_mode == "Simplex":
             # Forced single sided: one page per sheet, never a flip.
@@ -1240,6 +1261,7 @@ def process_print_job(filepath, intake=None):
             dispatch_to_printer_ipp(filepath, "Simplex", target, copies=copies,
                                     total_sheets=pages, sides="one-sided")
             set_state("COMPLETED", f"Processed and printed {filename}")
+            publish_log(f"Successfully completed printing '{filename}' in Simplex mode.", "success")
 
         else:
             print(f"[Logic] {print_mode} Mode")
@@ -1247,6 +1269,7 @@ def process_print_job(filepath, intake=None):
             dispatch_to_printer_ipp(filepath, print_mode, target, copies=copies,
                                     total_sheets=pages)
             set_state("COMPLETED", f"Processed and printed {filename}")
+            publish_log(f"Successfully completed printing '{filename}' in {print_mode} mode.", "success")
 
         record_history(filename, pages, sheets, copies, print_mode, target["name"], "COMPLETED")
         if os.path.exists(filepath):
@@ -1258,6 +1281,7 @@ def process_print_job(filepath, intake=None):
         set_state("CANCELLED", str(jc), side=None)
         record_history(filename, pages, sheets, copies, print_mode, target["name"],
                        "CANCELLED", str(jc))
+        publish_log(f"Print job for '{filename}' was cancelled: {jc}", "warning")
         remove_quietly(filepath)
 
     except ValueError as ve:
@@ -1267,6 +1291,7 @@ def process_print_job(filepath, intake=None):
         record_history(filename, pages, sheets, copies, print_mode, target["name"],
                        "ERROR", message)
         notify_error(filename, message)
+        publish_log(f"Validation failed for '{filename}': {message}", "error")
         try:
             error_path = os.path.join(ERROR_DIR, filename)
             shutil.move(filepath, error_path)
@@ -1281,6 +1306,7 @@ def process_print_job(filepath, intake=None):
         record_history(filename, pages, sheets, copies, print_mode, target["name"],
                        "ERROR", message)
         notify_error(filename, message)
+        publish_log(f"Fatal error while processing '{filename}': {message}", "error")
 
     finally:
         remove_quietly(front_pdf, back_pdf, duplex_pdf)
