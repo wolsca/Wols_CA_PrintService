@@ -49,9 +49,16 @@ echo "==> 1/7 Installing OS packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils
-# 'lp'/'lpstat' submit jobs to a local CUPS queue and 'ipptool' reports the page
-# progress shown in the web app (printers with "dispatch": "cups").
-apt-get install -y cups-client cups-ipp-utils || true
+
+if [[ "${WITH_CUPS}" == "yes" ]]; then
+    # Install the full CUPS server and the modern PDF printer driver
+    apt-get install -y cups printer-driver-cups-pdf cups-client cups-ipp-utils || true
+else
+    # 'lp'/'lpstat' submit jobs to a local CUPS queue and 'ipptool' reports the page
+    # progress shown in the web app (printers with "dispatch": "cups").
+    apt-get install -y cups-client cups-ipp-utils || true
+fi
+
 # Bonjour/mDNS makes the web app and the print queue discoverable as <host>.local.
 systemctl enable --now avahi-daemon || true
 
