@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+
+jobs:
+  python:
+    name: Python syntax and imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile the service
+        run: python -m py_compile Wols_CA_Double_Sided_Print_Service/Wols_CA_Double_Sided_Print_Service.py
+
+      - name: Validate the shipped configuration files
+        run: |
+          python -c "import json; json.load(open('Wols_CA_Double_Sided_Print_Service/WolsCADoubleSided.json'))"
+          python -c "import json; json.load(open('deploy/debian/WolsCADoubleSided.linux.json'))"
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Check syntax
+        run: |
+          bash -n deploy/debian/install.sh
+          bash -n deploy/debian/uninstall.sh
+
+      - name: Run shellcheck
+        run: shellcheck deploy/debian/install.sh deploy/debian/uninstall.sh

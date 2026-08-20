@@ -1,0 +1,95 @@
+{
+    "mqtt": {
+        "broker_ip": "192.168.101.240",
+        "broker_port": 1883,
+        "topic_prefix": "wolsca/printer",
+        "discovery_prefix": "homeassistant"
+    },
+    "paths": {
+        "drop_directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop",
+        "temp_directory": "C:\\ProgramData\\WolsCA\\PrintTemp",
+        "error_directory": "C:\\ProgramData\\WolsCA\\PrintError"
+    },
+    "hardware": {
+        "printer_uri": "ipps://192.168.101.251:443/ipp/print",
+        "flip_instruction": "",
+        "flip_timeout_seconds": 1800
+    },
+    "intake": {
+        "enabled": true,
+        "queues": [
+            {
+                "id": "booklet",
+                "cups_queue": "WolsCA_Booklet",
+                "description": "Booklet (A5, fold in the middle)",
+                "print_mode": "Booklet",
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\booklet"
+            },
+            {
+                "id": "duplex",
+                "cups_queue": "WolsCA_DoubleSided",
+                "description": "Double sided (front and back)",
+                "print_mode": "Duplex",
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\duplex"
+            },
+            {
+                "id": "simplex",
+                "cups_queue": "WolsCA_SingleSided",
+                "description": "Single sided (one page per sheet)",
+                "print_mode": "Simplex",
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\simplex"
+            }
+        ]
+    },
+    "printers": {
+        "default": "main",
+        "personal_choice_ttl_seconds": 900,
+        "targets": [
+            {
+                "id": "main",
+                "name": "Main Printer",
+                "host": "192.168.101.251",
+                "port": 9100,
+                "location": "Office",
+                "duplex": false,
+                "dispatch": "raw",
+                "cups_queue": "",
+                "flip_instruction": ""
+            }
+        ]
+    },
+    "web": {
+        "enabled": true,
+        "bind_address": "0.0.0.0",
+        "port": 8080,
+        "title": "Wols CA Booklet Printer",
+        "language": "en",
+        "public_url": "",
+        "admin_token": ""
+    },
+    "notify": {
+        "enabled": false,
+        "url": "https://ntfy.sh",
+        "topic": "",
+        "token": "",
+        "priority": "high",
+        "notify_on_error": true
+    },
+    "history": {
+        "enabled": true,
+        "max_entries": 10,
+        "file": ""
+    },
+    "virtual_printer": {
+        "name": "Wols CA Print Service",
+        "installer_path": "C:\\ProgramData\\WolsCA\\Installers\\PDFCreator-Setup.exe",
+        "download_url": "https://download.pdfforge.org/download/pdfcreator/PDFCreator-stable",
+        "cups_queue_name": "WolsCA_Booklet",
+        "cups_share_on_network": true
+    },
+    "settings": {
+        "user": "WolsCADoublePrint",
+        "password": "DefaultPassword",
+        "print_mode": "Booklet"
+    }
+}

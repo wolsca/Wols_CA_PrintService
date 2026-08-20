@@ -1,0 +1,28 @@
+[Unit]
+Description=Wols CA Double Sided Print Service
+Documentation=https://github.com/Wols-CA/Wols_CA_Double_Sided_Print_Service
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wolsca
+Group=lp
+Environment=PYTHONUNBUFFERED=1
+Environment=WOLSCA_CONFIG=/etc/wolsca/WolsCADoubleSided.json
+WorkingDirectory=/opt/wolsca-print-service
+ExecStart=/opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/Wols_CA_Double_Sided_Print_Service.py
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening (the service only needs its own spool dirs and outbound network).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/spool/wolsca /etc/wolsca
+
+[Install]
+WantedBy=multi-user.target

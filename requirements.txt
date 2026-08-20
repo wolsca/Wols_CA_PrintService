@@ -1,0 +1,7 @@
+paho-mqtt>=2.0.0
+watchdog>=3.0.0
+pypdf>=4.0.0
+
+# Optional: pure Python QR code generator for the /qr page. Without it the page
+# simply shows the web app address in large text.
+# segno>=1.6.0

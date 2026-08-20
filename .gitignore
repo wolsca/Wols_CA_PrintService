@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# CMake / CLion build output
+cmake-build-*/
+build/
+CMakeCache.txt
+CMakeFiles/
+
+# JetBrains IDE (keep shared run configurations in .run)
+.idea/workspace.xml
+.idea/shelf/
+.idea/httpRequests/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
