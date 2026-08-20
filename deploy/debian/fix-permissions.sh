@@ -91,11 +91,17 @@ if [[ -d "${INSTALL_DIR}" ]]; then
     chmod 0755 "${INSTALL_DIR}"
     find "${INSTALL_DIR}" -maxdepth 1 -type f -name '*.py' -exec chmod 0644 {} +
     find "${INSTALL_DIR}" -maxdepth 1 -type f -name '*.json' -exec chmod 0644 {} +
-    [[ -f "${INSTALL_DIR}/requirements.txt" ]] && chmod 0644 "${INSTALL_DIR}/requirements.txt"
+    if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
+        chmod 0644 "${INSTALL_DIR}/requirements.txt"
+    fi
     for name in VERSION BUILD_NUMBER; do
-        [[ -f "${INSTALL_DIR}/${name}" ]] && chmod 0644 "${INSTALL_DIR}/${name}" || true
+        if [[ -f "${INSTALL_DIR}/${name}" ]]; then
+            chmod 0644 "${INSTALL_DIR}/${name}"
+        fi
     done
-    [[ -d "${INSTALL_DIR}/venv" ]] && chmod 0755 "${INSTALL_DIR}/venv"
+    if [[ -d "${INSTALL_DIR}/venv" ]]; then
+        chmod 0755 "${INSTALL_DIR}/venv"
+    fi
     say "dir  0755 root:root ${INSTALL_DIR} (files 0644)"
 else
     echo "    [Warning] ${INSTALL_DIR} does not exist - run install.sh first." >&2
