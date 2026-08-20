@@ -33,7 +33,7 @@ prepare_config() {
     fi
     # Only the connection details are taken from the environment, so no
     # credentials have to be committed; everything else stays as configured.
-    if [ -n "${WOLSCA_MQTT_BROKER:-}${WOLSCA_MQTT_USER:-}${WOLSCA_MQTT_PASSWORD:-}${WOLSCA_MQTT_PREFIX:-}${WOLSCA_ADMIN_TOKEN:-}" ]; then
+    if [ -n "${WOLSCA_MQTT_BROKER:-}${WOLSCA_MQTT_USER:-}${WOLSCA_MQTT_PASSWORD:-}${WOLSCA_MQTT_PREFIX:-}${WOLSCA_ADMIN_TOKEN:-}${WOLSCA_VIRTUAL_OUTPUT:-}" ]; then
         "${PYTHON}" - "$CONFIG_PATH" <<'PY'
 import json, os, sys
 
@@ -44,6 +44,15 @@ with open(path) as handle:
 mqtt = data.setdefault("mqtt", {})
 settings = data.setdefault("settings", {})
 web = data.setdefault("web", {})
+hardware = data.setdefault("hardware", {})
+if os.environ.get("WOLSCA_VIRTUAL_OUTPUT") == "1":
+    # The virtual printer: the installer creates a raw queue with the
+    # 'wolscafile' backend, which copies the PDF into this directory instead of
+    # sending it to the real printer. Nothing else in the configuration changes.
+    target = os.environ.get("WOLSCA_VIRTUAL_OUTPUT_DIR", "/var/spool/wolsca/PrintOut")
+    hardware["printer_uri"] = f"wolscafile:{target}"
+    print(f"[Container] Virtual output: hardware.printer_uri -> wolscafile:{target}")
+
 mapping = [
     ("WOLSCA_MQTT_BROKER", mqtt, "broker_ip"),
     ("WOLSCA_MQTT_PREFIX", mqtt, "topic_prefix"),
@@ -106,31 +115,22 @@ start_cups() {
     fi
 }
 
-virtual_output_queue() {
+check_virtual_output() {
+    # prepare_config already pointed hardware.printer_uri at wolscafile:, so the
+    # installer created the output queue with that backend. Only verify it here:
+    # printing on the real printer during an automated test is unacceptable.
     local dir="${WOLSCA_VIRTUAL_OUTPUT_DIR:-/var/spool/wolsca/PrintOut}"
-    local queue
-    queue=$(cd "${INSTALL_DIR}" && WOLSCA_CONFIG="${CONFIG_PATH}" "${PYTHON}" -c \
-        "import config; print(config.get_config().get('hardware', {}).get('cups_queue_name') or 'WolsCA_Output')" 2>/dev/null)
-    queue=${queue:-WolsCA_Output}
-    log "Virtual output: '${queue}' writes PDF files into ${dir} instead of the printer."
+    mkdir -p "${dir}"
+    chmod 0777 "${dir}" 2>/dev/null || true
 
-    local device
-    device=$(cd "${INSTALL_DIR}" && WOLSCA_CONFIG="${CONFIG_PATH}" "${PYTHON}" -c \
-        "import installer; print(installer.ensure_cups_pdf_instance({'id': 'output', 'directory': '${dir}'}))")
-    local ppd
-    ppd=$(cd "${INSTALL_DIR}" && "${PYTHON}" -c \
-        "import installer; print(installer.find_cups_pdf_ppd() or '')")
-
-    if [ -n "${ppd}" ]; then
-        lpadmin -p "${queue}" -v "${device}" -P "${ppd}" -E \
-            -D "Wols CA virtual output printer (PDF)" -L "Wols CA Print Service"
-    else
-        lpadmin -p "${queue}" -v "${device}" -m everywhere -E \
-            -D "Wols CA virtual output printer (PDF)" -L "Wols CA Print Service"
+    local devices
+    devices=$(lpstat -v 2>/dev/null | grep -i "wolsca_output" || true)
+    if echo "${devices}" | grep -q "wolscafile:"; then
+        log "Virtual output active: ${devices}"
+        return 0
     fi
-    cupsenable "${queue}" || true
-    cupsaccept "${queue}" || true
-    wait_for_cups || log "cupsd is not answering after creating the virtual output queue."
+    log "[Error] The output queue does not use the virtual printer (${devices:-no queue found})."
+    return 1
 }
 
 install_queues() {
@@ -141,7 +141,9 @@ install_queues() {
     # cupsctl and lpadmin make cupsd restart itself; wait until it answers again.
     wait_for_cups || log "cupsd is not answering after the installation."
     if [ "${WOLSCA_VIRTUAL_OUTPUT:-0}" = "1" ]; then
-        virtual_output_queue
+        # Without the virtual queue the test would print on the real printer, so
+        # the container refuses to continue.
+        check_virtual_output || exit 1
     fi
 }
 

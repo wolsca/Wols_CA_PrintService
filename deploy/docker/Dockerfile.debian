@@ -52,8 +52,12 @@ COPY VERSION BUILD_NUMBER ./
 COPY deploy/debian/WolsCAPrintService.linux.json /opt/wolsca-print-service/WolsCAPrintService.default.json
 COPY deploy/debian/fix-permissions.sh ./
 COPY deploy/docker/entrypoint.sh /entrypoint.sh
+# Virtual printer for the automated print test (WOLSCA_VIRTUAL_OUTPUT=1).
+COPY deploy/docker/wolsca-file-backend.sh /usr/lib/cups/backend/wolscafile
 
-RUN chmod +x /entrypoint.sh fix-permissions.sh \
+RUN chmod 0700 /usr/lib/cups/backend/wolscafile \
+    && chown root:root /usr/lib/cups/backend/wolscafile \
+    && chmod +x /entrypoint.sh fix-permissions.sh \
     && mkdir -p /etc/wolsca \
                 /var/spool/wolsca/PrintFileDrop/booklet \
                 /var/spool/wolsca/PrintFileDrop/duplex \

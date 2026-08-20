@@ -354,8 +354,13 @@ def phase_printer(d):
     if not uri:
         d.check("hardware.printer_uri configured", False)
         return
-    d.command(["ipptool", "-t", uri, "get-printer-attributes.test"],
-              f"IPP get-printer-attributes on {uri}", timeout=45, expect="PASS")
+    if uri.startswith(("ipp://", "ipps://")):
+        d.command(["ipptool", "-t", uri, "get-printer-attributes.test"],
+                  f"IPP get-printer-attributes on {uri}", timeout=45, expect="PASS")
+    else:
+        # A socket or file backend (for example the virtual printer of the test
+        # container) does not speak IPP, so there is nothing to query.
+        d.info("IPP check skipped", detail=f"{uri} is not an IPP target")
     d.command(["lpstat", "-v"], "Device URIs of all queues")
     d.command(["lpstat", "-l", "-p", c.get("hardware", {}).get("cups_queue_name") or "WolsCA_Output"],
               "Details of the output queue", optional=True)

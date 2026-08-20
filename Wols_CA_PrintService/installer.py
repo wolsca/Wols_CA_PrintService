@@ -278,10 +278,15 @@ def ensure_physical_queue():
         return None
 
     queue_name = physical_queue_name(c)
-    ok = run_root_command(["lpadmin", "-p", queue_name, "-v", uri, "-m", "everywhere", "-E",
-                           "-o", "printer-is-shared=false",
-                           "-D", "Wols CA physical output printer",
-                           "-L", "Wols CA Print Service"],
+    lpadmin_args = ["lpadmin", "-p", queue_name, "-v", uri, "-E",
+                    "-o", "printer-is-shared=false",
+                    "-D", "Wols CA physical output printer",
+                    "-L", "Wols CA Print Service"]
+    # Driverless only makes sense for IPP targets; a socket or file backend gets a
+    # raw queue, so the PDF this service produced is passed through unchanged.
+    if uri.startswith(("ipp://", "ipps://", "http://", "https://", "dnssd://")):
+        lpadmin_args += ["-m", "everywhere"]
+    ok = run_root_command(lpadmin_args,
                           f"Creating output queue '{queue_name}' for {uri}")
     if not ok:
         print("[Warning] Could not create the output queue; the raw dispatch stays in place.")

@@ -566,6 +566,9 @@ CMakeLists.txt                                  CLion/CMake project model (no co
 requirements.txt                                Python dependencies (paho-mqtt, watchdog, pypdf)
 VERSION                                         Release 'x.y' (x by hand, y by the release tool)
 BUILD_NUMBER                                    Commit number, raised on every commit
+build_and_release.ps1                           One-shot pipeline: check, build, print test, tests, commit, package, release
+tools/make_test_pdf.py                          Generates the multi-page test document for the print test
+TestPrint/                                      Test documents; the printed result lands in TestPrint/Results/
 tools/bump_version.py                           Raises the commit number and the release number
 tools/git-hooks/pre-commit                      Raises BUILD_NUMBER on every commit
 tools/install-git-hooks.sh / .ps1               Enables the hooks (core.hooksPath)
@@ -581,6 +584,50 @@ Wols_CA_PrintService/
     Wols_CA_PrintService.py       The service (watcher, imposition, web app)
     WolsCAPrintService.json                      Runtime configuration (development)
 ```
+
+## Build, test and release pipeline (`build_and_release.ps1`)
+
+One PowerShell script does everything from a saved working tree to a published
+release, on Docker Desktop. Every step must pass before the next one starts, so
+nothing is committed or pushed when a test fails:
+
+| Step | What happens |
+| :--- | :--- |
+| 0 | Asks the IDE (CLion/Visual Studio) to save all open files |
+| 1 | Preconditions: Python 3, Docker daemon, git working tree, registry login |
+| 2 | Syntax check of every Python file, import check of all modules, validation of the shipped JSON |
+| 3 | Builds the Debian container image (`deploy/docker/Dockerfile.debian`) |
+| 4 | Print test to a **virtual printer**: a real job through intake queue, cups-pdf, watcher, imposition and the flip - written as PDF files instead of paper |
+| 5 | All self-test phases inside the container (`chain` excluded: step 4 covers it better) |
+| 6 | Raises `BUILD_NUMBER`, commits and pushes |
+| 7 | Pushes the container package (`build-<version>`, `test`; on a release also `<version>` and `latest`) |
+| 8 | With `-Release`: cuts the release from `changesFixes.md`, tags `vX.Y`, branches off to `release/vX.Y` and freezes that branch |
+
+```powershell
+.\build_and_release.ps1 -SkipGit -SkipPush            # only verify locally
+.\build_and_release.ps1 -CommitMessage "Watcher fix"   # commit + test package
+.\build_and_release.ps1 -Release -CommitMessage "..."  # release, tag and freeze
+```
+
+The print test uses the newest PDF in `TestPrint/` (or `-TestDocument <file>`;
+without either, `tools/make_test_pdf.py` generates a three-page A4 document).
+Three pages means two sheets, so front side, flip and back side are all
+exercised. At the flip prompt the script waits `-FlipWaitSeconds` (default 30)
+before pressing Continue, so the state can be followed in Home Assistant and the
+web app. The result is stored as
+`TestPrint/Results/<document>-<version>-front|back.pdf`, and the container logs
+land in `build/logs/`.
+
+The virtual printer is `WOLSCA_VIRTUAL_OUTPUT=1`: the container points
+`hardware.printer_uri` at `wolscafile:<dir>` before the installer runs, so the
+output queue uses the `wolscafile` CUPS backend, which copies the produced PDF
+into `WOLSCA_VIRTUAL_OUTPUT_DIR`. The container refuses to start when the output
+queue is not that virtual printer, so an automated test can never print on the
+real printer.
+
+Freezing the release branch uses the GitHub API and needs `$env:GITHUB_TOKEN`
+(or a git-ignored `.github_token`) with administration rights; without a token
+the branch is pushed but has to be locked by hand under *Settings > Branches*.
 
 ## Development in CLion
 
