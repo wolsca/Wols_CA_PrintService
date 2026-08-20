@@ -86,22 +86,25 @@ chmod 2775 "${SPOOL_DIR}"
 
 echo "==> 4/7 Copying application files"
 # Copy all modular components
-install -o root -g root -m 0644 "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/config.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/hardware_dispatcher.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/installer.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/mqtt_service.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/pdf_processor.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/hardware_dispatcher.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/web_app.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/web_strings.json" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${REPO_ROOT}/requirements.txt" "${INSTALL_DIR}/"
 
 if [[ ! -f "${CONFIG_DIR}/WolsCAPrintService.json" ]]; then
-    install -o root -g "${SERVICE_USER}" -m 0640 \
+    install -o root -g "${SERVICE_USER}" -m 0660 \
         "${REPO_ROOT}/deploy/debian/WolsCAPrintService.linux.json" \
         "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Installed default configuration - review ${CONFIG_DIR}/WolsCAPrintService.json"
 else
+    # Als het bestand al bestaat, corrigeer dan alsnog de rechten
+    chmod 0660 "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Existing configuration kept: ${CONFIG_DIR}/WolsCAPrintService.json"
 fi
 
