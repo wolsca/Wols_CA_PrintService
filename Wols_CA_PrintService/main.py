@@ -14,7 +14,7 @@ import web_app
 import installer
 from watchdog.observers import Observer
 
-SERVICE_VERSION = "1.4.2"
+SERVICE_VERSION = "1.4.3"
 shutdown_event = threading.Event()
 job_queue = queue.Queue()
 queue_lock = threading.Lock()
@@ -111,10 +111,40 @@ def process_print_job(filepath, intake=None):
 
             mqtt_service.publish_log(f"Successfully completed printing '{filename}' in Booklet mode.", "success")
 
+        elif print_mode == "Duplex":
+            sheets = (pages + 1) // 2
+            print("[Logic] Duplex Mode (forced double sided, no imposition).")
+            mqtt_service.set_state("PROCESSING", f"{pages} pages become {sheets} sheet(s)", pages=pages, sheets=sheets)
+
+            if duplex or pages < 2:
+                # Bugfix: Prevent mechanical hardware flip for single-page documents
+                actual_sides = "two-sided-long-edge" if (duplex and pages > 1) else "one-sided"
+
+                hardware_dispatcher.dispatch_to_printer_ipp(filepath, "Duplex", target, side="both",
+                                                            copies=copies, duplex=duplex, total_sheets=pages,
+                                                            sides=actual_sides, shutdown_event=shutdown_event)
+            else:
+                front_pdf, back_pdf, pages = pdf_processor.generate_two_sided_pdfs(filepath)
+                while True:
+                    print("[Job 1] Dispatching the odd pages...")
+                    hardware_dispatcher.dispatch_to_printer_ipp(front_pdf, "Duplex-Front", target, side="front",
+                                                                copies=copies, total_sheets=sheets,
+                                                                sides="one-sided", shutdown_event=shutdown_event)
+                    if wait_for_flip(filename, sheets, instruction) == "resume":
+                        break
+
+                print("[Job 2] Dispatching the even pages...")
+                hardware_dispatcher.dispatch_to_printer_ipp(back_pdf, "Duplex-Back", target, side="back",
+                                                            copies=copies, total_sheets=sheets,
+                                                            sides="one-sided", shutdown_event=shutdown_event)
+
+            mqtt_service.publish_log(f"Successfully completed printing '{filename}' in Duplex mode.", "success")
+
         elif print_mode == "Simplex":
             print("[Logic] Simplex Mode.")
             hardware_dispatcher.dispatch_to_printer_ipp(filepath, "Simplex", target, copies=copies, total_sheets=pages, sides="one-sided", shutdown_event=shutdown_event)
             mqtt_service.publish_log(f"Successfully printed '{filename}' in Simplex.", "success")
+
         else:
             hardware_dispatcher.dispatch_to_printer_ipp(filepath, print_mode, target, copies=copies, total_sheets=pages, shutdown_event=shutdown_event)
 
