@@ -180,6 +180,9 @@ class Diagnostics:
 
 def phase_system(d):
     """Host, OS and service unit state."""
+    import version
+    d.info("Service version", json.dumps(version.version_info(), indent=2),
+           version.FULL_VERSION)
     d.command(["uname", "-a"], "Kernel and architecture")
     d.command(["cat", "/etc/os-release"], "Debian release")
     d.command(["systemctl", "is-active", "wolsca-print-service"],
@@ -210,6 +213,101 @@ def phase_config(d):
             f"dispatch={target.get('dispatch')}, cups_queue={target.get('cups_queue')}",
             optional=True)
     d.info("Intake queues", json.dumps(c.get("intake", {}).get("queues", []), indent=2))
+
+
+def phase_permissions(d):
+    """Ownership and access rights of every location the service touches."""
+    c = config.get_config()
+
+    def describe(path):
+        try:
+            info = os.stat(path)
+        except OSError as e:
+            return str(e)
+        try:
+            import grp
+            import pwd
+            owner = pwd.getpwuid(info.st_uid).pw_name
+            group = grp.getgrgid(info.st_gid).gr_name
+        except Exception:
+            owner, group = str(info.st_uid), str(info.st_gid)
+        return f"{oct(info.st_mode & 0o7777)} {owner}:{group}"
+
+    d.command(["id", "-a"], "Effective user of this process")
+
+    config_dir = os.path.dirname(config.CONFIG_PATH)
+    d.check(f"Configuration directory {config_dir} traversable",
+            os.path.isdir(config_dir) and os.access(config_dir, os.X_OK | os.R_OK),
+            describe(config_dir))
+    d.check(f"Configuration file {config.CONFIG_PATH} readable",
+            os.access(config.CONFIG_PATH, os.R_OK), describe(config.CONFIG_PATH))
+    d.check("Configuration file writable (the installer rewrites it)",
+            os.access(config.CONFIG_PATH, os.W_OK), describe(config.CONFIG_PATH),
+            optional=True)
+
+    directories = [config.DROP_DIR, config.TEMP_DIR, config.ERROR_DIR]
+    directories += [q.get("directory") for q in c.get("intake", {}).get("queues", [])
+                    if q.get("directory")]
+    for directory in directories:
+        ok = os.path.isdir(directory) and os.access(directory, os.R_OK | os.W_OK | os.X_OK)
+        d.check(f"Spool directory {directory} readable and writable", ok, describe(directory))
+
+    history = c.get("history", {}).get("file")
+    if history:
+        parent = os.path.dirname(history) or "."
+        d.check(f"History file location {parent} writable",
+                os.access(history if os.path.exists(history) else parent, os.W_OK),
+                describe(history if os.path.exists(history) else parent))
+
+    d.command(["ls", "-ld"] + [p for p in directories if p], "Modes of the spool directories",
+              optional=True)
+    d.info("Remedy", "sudo /opt/wolsca-print-service/fix-permissions.sh",
+           "run this if any check above failed")
+
+
+def phase_update(d):
+    """Version files and the availability of a newer release."""
+    import updater
+    import version
+
+    d.info("Installed version", json.dumps(version.version_info(), indent=2),
+           version.FULL_VERSION)
+    section = updater.update_config()
+    d.info("Update configuration", json.dumps(section, indent=2),
+           f"{section.get('repository')} ({section.get('channel')})")
+
+    d.check("Only releases trigger an update",
+            str(section.get("channel", "release")).lower() == "release",
+            "commit builds must be requested with the test build button", optional=True)
+
+    result = updater.check(publish=False)
+    d.check("Update check succeeded", bool(result.get("check_ok")), result["last_result"])
+    d.check("Running the latest release", not result["update_available"],
+            f"installed {result['installed_version']}, release {result['latest_version']}"
+            + (f" ({result['release_tag']})" if result.get("release_tag") else ""),
+            optional=True)
+
+    source = section.get("source_directory")
+    d.check(f"Source checkout {source} present",
+            os.path.isdir(os.path.join(source or "", ".git")),
+            "needed for the update button", optional=True)
+
+
+def phase_admin(d):
+    """The administrator configuration editor and its restart state."""
+    import admin
+
+    d.check("Administrator token configured", bool(admin.admin_token()),
+            "web.admin_token unlocks the configuration editor in the web app",
+            optional=True)
+    d.info("Editable settings", "\n".join(f"{f['key']} = {admin.get_value(f['key'])}"
+                                          for f in admin.FIELDS),
+           f"{len(admin.FIELDS)} settings")
+    d.check("No restart pending", not admin.state["restart_required"],
+            admin.state["last_result"] or "no configuration change waiting", optional=True)
+    d.check(f"Configuration file {config.CONFIG_PATH} writable",
+            os.access(config.CONFIG_PATH, os.W_OK),
+            "needed to save changes from the web app or Home Assistant")
 
 
 def phase_cups(d):
@@ -301,9 +399,19 @@ def phase_chain(d):
     queue_name = q_entry.get("cups_queue")
     directory = q_entry.get("directory") or config.DROP_DIR
 
-    before = set()
-    for root, _dirs, files in os.walk(directory):
-        before.update(os.path.join(root, f) for f in files)
+    # Watch the whole drop tree, not only the directory of this queue: when
+    # cups-pdf ignores its per-instance configuration the PDF lands in the
+    # parent folder, and then the print mode of the queue is silently lost.
+    watched = config.DROP_DIR
+
+    def snapshot():
+        found = set()
+        for root, _dirs, files in os.walk(watched):
+            found.update(os.path.join(root, f) for f in files
+                         if f.lower().endswith(".pdf"))
+        return found
+
+    before = snapshot()
 
     step = d.command(["lp", "-d", queue_name, "-t", "WolsCA-SelfTest",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_strings.json")],
@@ -315,13 +423,19 @@ def phase_chain(d):
     appeared = []
     while time.time() < deadline and not appeared:
         time.sleep(2)
-        for root, _dirs, files in os.walk(directory):
-            for name in files:
-                path = os.path.join(root, name)
-                if path not in before and name.lower().endswith(".pdf"):
-                    appeared.append(path)
-    d.check("cups-pdf produced a PDF in the drop folder", bool(appeared),
-            ", ".join(os.path.basename(p) for p in appeared) or f"nothing new in {directory} within 40s")
+        appeared = sorted(snapshot() - before)
+
+    d.check("cups-pdf produced a PDF in the drop tree", bool(appeared),
+            ", ".join(appeared) or f"nothing new below {watched} within 40s")
+    if appeared:
+        in_queue_dir = [p for p in appeared
+                        if os.path.abspath(p).startswith(os.path.abspath(directory) + os.sep)]
+        d.check(f"PDF landed in the directory of '{queue_name}'", bool(in_queue_dir),
+                f"expected below {directory}, found {', '.join(appeared)}; "
+                "if it is in the parent folder cups-pdf ignored "
+                f"/etc/cups/cups-pdf-{q_entry.get('id')}.conf and the print mode "
+                "of the queue is lost")
+    d.command("ls -laR " + watched, "Content of the drop tree", optional=True)
     d.command(["lpstat", "-W", "completed", "-o"], "Completed CUPS jobs", optional=True)
     d.command(["journalctl", "-u", "wolsca-print-service", "-n", "40", "--no-pager"],
               "Last service log lines", optional=True)
@@ -330,6 +444,9 @@ def phase_chain(d):
 PHASES = {
     "system": phase_system,
     "config": phase_config,
+    "admin": phase_admin,
+    "permissions": phase_permissions,
+    "update": phase_update,
     "cups": phase_cups,
     "printer": phase_printer,
     "network": phase_network,
@@ -337,7 +454,8 @@ PHASES = {
 }
 
 # 'chain' actually submits a print job, so it is not part of the default run.
-DEFAULT_PHASES = ["system", "config", "cups", "printer", "network"]
+DEFAULT_PHASES = ["system", "config", "admin", "permissions", "update",
+                  "cups", "printer", "network"]
 
 
 def run(phases=None, publish=True):

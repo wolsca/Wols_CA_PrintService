@@ -13,10 +13,13 @@ import file_watcher
 import web_app
 import installer
 import diagnostics
+import updater
+import version
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
-SERVICE_VERSION = "2.1.0-Hybrid"
+# Release 'x.y' from the VERSION file plus the commit number from BUILD_NUMBER.
+SERVICE_VERSION = version.FULL_VERSION
 RESCAN_INTERVAL_SECONDS = 15.0
 shutdown_event = threading.Event()
 job_queue = queue.Queue()
@@ -172,6 +175,7 @@ def start_service():
 
     print(f"\n===================================================")
     print(f"  Wols CA Print Service {SERVICE_VERSION} started!")
+    print(f"  Release {version.RELEASE}, commit number {version.BUILD}")
     print(f"  Hybrid Architecture - CUPS Intake Active")
     print(f"===================================================\n")
 
@@ -198,6 +202,7 @@ def start_service():
 
     observer.start()
     threading.Thread(target=rescan_worker, daemon=True).start()
+    updater.start_watcher(shutdown_event)
     shutdown_event.wait()
     if httpd: httpd.shutdown()
     observer.stop()
@@ -220,10 +225,51 @@ def run_self_test(argv):
     mqtt_service.stop_mqtt()
     sys.exit(0 if report.get("failed", 1) == 0 else 1)
 
+def run_update_check(argv):
+    """Prints the installed and the latest version; exit code 1 when outdated.
+
+    Without --test only published releases count, exactly like the Home
+    Assistant update entity; with --test the branch head is reported.
+    """
+    if "--test" in argv:
+        result = updater.check_test_build(publish=False)
+        print(f"Installed : {result['installed_version']}")
+        print(f"Test build: {result['test_version'] or '-'}")
+        print(result["test_result"])
+        sys.exit(1 if result["test_available"] else 0)
+
+    result = updater.check(publish=False)
+    print(f"Installed: {result['installed_version']}")
+    print(f"Release  : {result['latest_version']}")
+    print(result["last_result"])
+    sys.exit(1 if result["update_available"] else 0)
+
+
+def run_update(argv):
+    """Installs the latest release, or the branch head with --test."""
+    if "--test" in argv:
+        result = updater.install_test_build(publish=False)
+        sys.exit(0 if "Updated" in result["last_result"] else 1)
+
+    updater.check(publish=False)
+    if not updater.state["update_available"] and "--force" not in argv:
+        print("[Update] Already up to date; use --force to reinstall anyway.")
+        sys.exit(0)
+    result = updater.install(publish=False)
+    sys.exit(0 if "Updated" in result["last_result"] else 1)
+
+
 if __name__ == "__main__":
-    if "--install-printer" in sys.argv:
+    if "--version" in sys.argv:
+        for key, value in version.version_info().items():
+            print(f"{key}: {value}")
+    elif "--install-printer" in sys.argv:
         installer.perform_cups_printer_install()
     elif "--self-test" in sys.argv:
         run_self_test(sys.argv)
+    elif "--check-update" in sys.argv:
+        run_update_check(sys.argv)
+    elif "--update" in sys.argv:
+        run_update(sys.argv)
     else:
         start_service()

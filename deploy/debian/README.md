@@ -67,7 +67,9 @@ What the installer does:
    enables network sharing and advertises the web app over mDNS
    (`/etc/avahi/services/wolsca-print-web.service`);
 7. installs and starts the `wolsca-print-service` systemd unit and, when `ufw` is
-   active, opens TCP 631, TCP 8080 and UDP 5353.
+   active, opens TCP 631, TCP 8080 and UDP 5353;
+8. runs `fix-permissions.sh` as the last step, so every location has the right
+   owner, group and mode - also for what `--install-printer` just created.
 
 Omit `--with-cups` if you want to set the queue up later:
 
@@ -76,6 +78,30 @@ sudo WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json \
      /opt/wolsca-print-service/venv/bin/python \
      /opt/wolsca-print-service/main.py --install-printer
 ```
+
+### Ownership and permissions
+
+All access rights are owned by one idempotent script, so a wrong mode can always
+be repaired without reinstalling:
+
+```bash
+sudo ./deploy/debian/fix-permissions.sh             # from the checkout
+sudo /opt/wolsca-print-service/fix-permissions.sh   # after an install
+```
+
+| Location | Owner:group | Mode |
+| --- | --- | --- |
+| `/opt/wolsca-print-service` | `root:root` | `0755`, files `0644` |
+| `/etc/wolsca` | `root:root` | `0755` (must be traversable by CUPS and the diagnostics) |
+| `/etc/wolsca/WolsCAPrintService.json` | `root:root` | `0664` (the installer rewrites the printer target) |
+| `/var/spool/wolsca` and every drop/temp/error directory | `root:lp` | `2775` (setgid, so files created by cups-pdf keep group `lp`) |
+| Spooled files | `root:lp` | `0664` |
+| `/etc/systemd/system/wolsca-print-service.service` | `root:root` | `0644` |
+| `/etc/cups/cups-pdf*.conf` | `root:lp` | `0644` |
+
+The directory list is read from the live configuration (`paths.*` and
+`intake.queues[].directory`), so custom paths are covered too. The `permissions`
+phase of the self-test verifies all of this and reports it to Home Assistant.
 
 ## 4. Configure
 
@@ -150,6 +176,29 @@ sudo ./deploy/debian/uninstall.sh             # remove, keeps config + spool
 sudo ./deploy/debian/uninstall.sh --purge     # remove everything
 ```
 
+### Updating from Home Assistant or the web app
+
+The service reports its version (`x.y.<commit number>`, from the `VERSION` and
+`BUILD_NUMBER` files) and can update itself:
+
+```bash
+sudo /opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/main.py --version
+... main.py --check-update    # exit code 1 when a newer version exists
+... main.py --update          # git fetch/reset plus install.sh
+```
+
+The update runs `git fetch` and `git reset --hard origin/<branch>` in
+`update.source_directory` (default `/usr/local/src/wolsca-print-service`) and then
+`deploy/debian/install.sh`, which restarts the unit. So keep the git checkout on the
+server - it is what the *Update now* button uses.
+
+- **Home Assistant**: the `update.print_service_update` entity shows the installed and
+  the latest version and has an *Install* button; the *Check for Print Service Update*
+  button and the *Print Service Automatic Update* switch are next to it.
+- **Web app**: the *Version and updates* card has the same three controls.
+- The service checks by itself every `update.check_interval_hours` and, when
+  `update.auto_update` is on, installs a new release immediately.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -165,4 +214,7 @@ sudo ./deploy/debian/uninstall.sh --purge     # remove everything
 | Wrong printer used | A personal choice from the web app wins for `personal_choice_ttl_seconds`; check `journalctl` for the `[Printers] Target:` line |
 | `Printer refused the connection` | The physical printer must accept raw port 9100 (JetDirect) |
 | Files land in a per-user folder | Re-run `--install-printer`; cups-pdf `Out`/`AnonDirName` must be the drop directory |
-| Permission denied on the drop dir | The service user must be in group `lp` and the directory mode `2775` |
+| Permission denied on the drop dir | `sudo /opt/wolsca-print-service/fix-permissions.sh`; the service user must be in group `lp` and the directory mode `2775` |
+| `Errno 13` on the configuration file | `sudo /opt/wolsca-print-service/fix-permissions.sh`; `/etc/wolsca` must be `0755` and the JSON `0664` |
+| Update button does nothing | `update.source_directory` must be a git checkout of the repository; run `main.py --self-test update` |
+| Version reported as `0.0.0` | `VERSION` and `BUILD_NUMBER` are missing in `/opt/wolsca-print-service`; re-run `install.sh` |

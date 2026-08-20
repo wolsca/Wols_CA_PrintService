@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+#
+# Wols CA Print Service - raises the commit number on every commit.
+#
+# Install with: tools/install-git-hooks.sh  (or .ps1 on Windows)
+#
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Skip while amending or rebasing: those reuse an existing commit number.
+if [ -d "${REPO_ROOT}/.git/rebase-merge" ] || [ -d "${REPO_ROOT}/.git/rebase-apply" ]; then
+    exit 0
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+else
+    PYTHON=python
+fi
+
+VERSION="$("${PYTHON}" "${REPO_ROOT}/tools/bump_version.py" --build)"
+git add "${REPO_ROOT}/BUILD_NUMBER"
+echo "[version] commit number raised, this commit is ${VERSION}"

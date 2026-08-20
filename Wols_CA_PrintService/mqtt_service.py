@@ -3,8 +3,10 @@ import threading
 from datetime import datetime
 import paho.mqtt.client as mqtt
 import config
+import version
 
-SERVICE_VERSION = "1.4.2"
+# Release from the VERSION file plus the commit number from BUILD_NUMBER.
+SERVICE_VERSION = version.FULL_VERSION
 
 # --- State Management ---
 state_lock = threading.Lock()
@@ -71,7 +73,8 @@ DEVICE_INFO = {
     "identifiers": ["wolsca_print_service_01"],
     "name": "Wols CA Print Service",
     "manufacturer": "Wols CA",
-    "model": "Double Sided Spooler v1.4"
+    "model": "Double Sided Spooler",
+    "sw_version": SERVICE_VERSION
 }
 
 def publish_ha_discovery():
@@ -119,12 +122,24 @@ def publish_ha_discovery():
     }
     mqtt_client.publish(f"{HA_PREFIX}/button/wolsca_print/cancel/config", json.dumps(config_cancel), retain=True)
 
-    # Imported late: diagnostics imports this module.
+    # Imported late: these modules import this one.
     try:
         import diagnostics
         diagnostics.publish_ha_discovery()
     except Exception as e:
         print(f"[Warning] Could not publish the diagnostics discovery: {e}")
+
+    try:
+        import updater
+        updater.publish_ha_discovery()
+    except Exception as e:
+        print(f"[Warning] Could not publish the update discovery: {e}")
+
+    try:
+        import admin
+        admin.publish_ha_discovery()
+    except Exception as e:
+        print(f"[Warning] Could not publish the admin discovery: {e}")
 
 def set_state(state, detail="", pending_count=0, **fields):
     """Updates the global job state and publishes it to MQTT."""
@@ -183,6 +198,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
         print(f"[MQTT] Successfully connected to broker at {broker_ip}")
         publish_ha_discovery()
         client.subscribe(f"{PREFIX}/command")
+        client.subscribe(f"{PREFIX}/admin/set/#")
         set_state("IDLE", "Service started and synchronized with HA.")
         publish_log("Service started and synchronized with Home Assistant.", "info")
     else:
@@ -192,6 +208,12 @@ def on_message(client, userdata, msg):
     global waiting_for_user_action
     payload = msg.payload.decode('utf-8')
     topic = msg.topic
+
+    if topic.startswith(f"{PREFIX}/admin/set/"):
+        # An administrator changed a setting from Home Assistant.
+        import admin
+        admin.handle_command(topic, payload)
+        return
 
     if topic == f"{PREFIX}/command" and payload == "RESUME":
         if waiting_for_user_action:
@@ -220,6 +242,30 @@ def on_message(client, userdata, msg):
             phases = None
         print(f"[System] 'SELFTEST' command received via MQTT ({phases or 'default phases'}).")
         diagnostics.run_async(phases)
+
+    elif topic == f"{PREFIX}/command" and payload in ("CHECK_UPDATE", "INSTALL_UPDATE",
+                                                      "CHECK_TEST_BUILD", "INSTALL_TEST_BUILD",
+                                                      "AUTOUPDATE_ON", "AUTOUPDATE_OFF"):
+        import updater
+        print(f"[System] '{payload}' command received via MQTT.")
+        if payload == "CHECK_UPDATE":
+            updater.check_async()
+        elif payload == "INSTALL_UPDATE":
+            updater.install_async()
+        elif payload == "CHECK_TEST_BUILD":
+            updater.check_test_build_async()
+        elif payload == "INSTALL_TEST_BUILD":
+            updater.install_test_build_async()
+        else:
+            updater.set_auto_update(payload == "AUTOUPDATE_ON")
+
+    elif topic == f"{PREFIX}/command" and payload in ("RESTART_SERVICE", "RELOAD_CONFIG"):
+        import admin
+        print(f"[System] '{payload}' command received via MQTT.")
+        if payload == "RESTART_SERVICE":
+            admin.restart_async()
+        else:
+            admin.reload_config()
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message

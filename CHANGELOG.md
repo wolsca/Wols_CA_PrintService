@@ -4,10 +4,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Unreleased changes are collected in `changesFixes.md`; `tools/release.py` moves them into
+`RELEASE_NOTES.md` and this file when a release is cut, and empties that file again.
 
 ### Added
+- Release notes workflow: `changesFixes.md` in the repository root collects every change and fix
+  while working, and `tools/release.py` cuts the release from it - it computes the new `x.y`,
+  prepends `## x.y.<build> - <date>` plus the collected notes to `RELEASE_NOTES.md` (only ever
+  prepended, so the history stays 100% complete) and to `CHANGELOG.md`, writes `VERSION` /
+  `.version-released`, empties `changesFixes.md` and can create the `vX.Y` git tag (`--tag`,
+  `--major`, `--dry-run`, `--allow-empty`).
+- Administrator configuration editor (`Wols_CA_PrintService/admin.py`):
+  - Web app: a token-protected *Administrator* card (`web.admin_token`; while it is empty the
+    editor cannot be opened) with one field per editable setting, which asks
+    "Configuration saved. Restart the service now?" after saving, plus *Restart service*,
+    *Discard changes* and *Lock*.
+  - Home Assistant: its own MQTT device *Wols CA Print Service Admin* with a `text`, `number`,
+    `switch` or `select` entity per setting, a `Restart required` binary sensor and the
+    *Restart Print Service* / *Discard Configuration Changes* buttons - so the admin entities can
+    be hidden from normal users.
+  - Values are validated (type, range, options) against the whitelist in `admin.FIELDS`, a `.bak`
+    of the configuration is kept, and MQTT topics `<prefix>/admin/value/<key>` (retained) and
+    `<prefix>/admin/set/<key>` plus the commands `RESTART_SERVICE` and `RELOAD_CONFIG` are added.
+  - New endpoints `GET/POST /api/admin/config`, `POST /api/admin/restart` and
+    `POST /api/admin/reload`, all rejecting requests without the token with `403`.
+  - Self-test: new `admin` phase (part of the default run).
+- Local test container (`deploy/docker/`): `Dockerfile.debian` on the Debian flavour of the Home
+  Assistant base images, `entrypoint.sh`, `docker-compose.yml` and `tools/run-local-test.ps1` run
+  the service on Docker Desktop with the same packages, the same `installer.py`, the same CUPS
+  intake queues, the same `/etc/wolsca/WolsCAPrintService.json` and the same spool directories as
+  the Debian server - so the self-test phases can be run locally, and the same image can later be
+  published as a Home Assistant add-on.
+
+### Changed
+- Updates only react to **published GitHub releases**: the latest release tag is compared with the
+  installed version and installed with `git reset --hard <tag>`, so a commit never makes Home
+  Assistant offer an update, and the branch is no longer used as a fallback when no release exists.
+- Commit builds are now an explicit *test build* path: `CHECK_TEST_BUILD` / `INSTALL_TEST_BUILD`,
+  the *Check/Install test build* buttons in Home Assistant and the web app,
+  `main.py --check-update --test` / `--update --test`, `sensor.print_service_test_build` and the
+  new `update.allow_test_builds` setting. Automatic updates never install a test build.
+- `installer.py` also runs where there is no systemd or `apt-get` (the test container): package
+  installation is skipped when the packages are already present and `systemctl` calls are skipped
+  instead of reported as errors; everything else is the same code path as on the server.
+
+### Added
+- Version numbering `x.y.<commit number>` (currently **1.4.381**), carried by two plain text
+  files in the repository root and read by the new `Wols_CA_PrintService/version.py`:
+  - `VERSION` holds the release `x.y` - `x` (main release) is raised by hand, `y` (minor release)
+    by `tools/bump_version.py --release`: when `x` was raised, `y` restarts at `0`, otherwise it
+    becomes the current `y + 1` (the last released `x.y` is remembered in `.version-released`).
+  - `BUILD_NUMBER` holds the commit number, starting at **381**, raised by one on every commit by
+    `tools/git-hooks/pre-commit` (enable once with `tools/install-git-hooks.sh` / `.ps1`).
+  - `mqtt_service.SERVICE_VERSION`, the MQTT status payload, the Home Assistant device
+    (`sw_version`), the startup banner, the web app and the self-test all use this single source;
+    the hardcoded `"1.4.2"` and `"2.1.0-Hybrid"` strings are gone. `install.sh` ships both files
+    to `/opt/wolsca-print-service/` and prints the installed version.
+  - New command line switches: `main.py --version`, `--check-update` and `--update [--force]`.
+- Update checking and self-update (`Wols_CA_PrintService/updater.py`) with a new `update`
+  configuration section (`enabled`, `repository`, `branch`, `channel`, `check_interval_hours`,
+  `auto_update`, `source_directory`, `update_command`):
+  - Reads the latest version from the newest GitHub release tag, or from the `VERSION` /
+    `BUILD_NUMBER` files on the branch when `channel` is `branch` (also the fallback when no
+    release exists yet); the state is published retained to `<prefix>/update/state`.
+  - Installing runs `git fetch` + `git reset --hard origin/<branch>` in `update.source_directory`
+    and then `deploy/debian/install.sh`, with the whole command output logged and published.
+  - The service checks every `check_interval_hours` and installs automatically when
+    `auto_update` is on; the switch is persisted in the configuration.
+  - Home Assistant: a real `update` entity (installed/latest version, *Install* button, release
+    notes), `sensor.print_service_version`, a *Check for Print Service Update* button, an
+    *Install Print Service Update* button and a *Print Service Automatic Update* switch;
+    MQTT commands `CHECK_UPDATE`, `INSTALL_UPDATE`, `AUTOUPDATE_ON` and `AUTOUPDATE_OFF`.
+  - Web app: new *Version and updates* card, plus `GET /api/update`, `POST /api/update/check`,
+    `POST /api/update/install` and `POST /api/update/auto`.
+  - Self-test: new `update` phase (part of the default run) reporting the version files, the
+    update configuration, the reachability of GitHub, whether a newer version exists and whether
+    the source checkout needed for the update button is present.
+- `deploy/debian/fix-permissions.sh`: one idempotent script that applies the intended owner,
+  group and mode to every location the service uses - `/opt/wolsca-print-service` (root:root,
+  `0755`/`0644`), `/etc/wolsca` (`0755`) and its JSON (`0664`), the spool root and all drop, temp
+  and error directories taken from the live configuration (`root:lp`, setgid `2775`, files `0664`),
+  the history file, the systemd unit and the `cups-pdf*.conf` files. `install.sh` runs it as its
+  new last step (8/8), so it also covers what `--install-printer` just created, and installs it to
+  `/opt/wolsca-print-service/fix-permissions.sh` for later repairs.
+- Self-test: new `permissions` phase (part of the default run) verifying owner, group, mode and
+  the real read/write access of the configuration and of every spool directory, and naming
+  `fix-permissions.sh` as the remedy.
 - Self-test / diagnostics module (`diagnostics.py`): runs the print chain phase by phase
-  (`system`, `config`, `cups`, `printer`, `network`, and the optional `chain` test print) and logs
+  (`system`, `config`, `permissions`, `update`, `cups`, `printer`, `network`, and the optional `chain` test print) and logs
   every Debian command together with its exit code and output.
   - Each step is published to `<prefix>/diagnostics/step`; the aggregated report (counters,
     failed steps and a ready-made markdown summary) is published retained to
@@ -20,7 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New endpoints `GET /api/diagnostics` and `POST /api/diagnostics/run`.
 
 ### Changed
-Refactored the monolithic Wols_CA_PrintService.py script into a highly readable, modular architecture (main.py, pdf_processor.py, etc.) for improved maintainability.
+- `install.sh` no longer makes `/etc/wolsca/WolsCAPrintService.json` world-writable (`0666`);
+  it is now `root:root 0664` and `/etc/wolsca` is `0755` instead of `0750`, so CUPS and the
+  diagnostics can traverse it while the service can still rewrite the printer target.
+- Refactored the monolithic Wols_CA_PrintService.py script into a highly readable, modular architecture (main.py, pdf_processor.py, etc.) for improved maintainability.
 
 ### Fixed
 - CI: the workflow still byte-compiled the removed monolithic `Wols_CA_PrintService.py`, so every

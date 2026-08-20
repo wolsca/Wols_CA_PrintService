@@ -20,3 +20,10 @@ CMakeFiles/
 .vs/
 *.suo
 *.user
+
+# Configuration backups written by the administrator editor
+*.json.bak
+
+# Local container settings with credentials
+deploy/docker/.env.local
+deploy/docker/config/WolsCAPrintService.json

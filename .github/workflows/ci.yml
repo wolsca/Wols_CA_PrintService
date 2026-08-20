@@ -29,19 +29,29 @@ jobs:
         env:
           WOLSCA_CONFIG: ${{ runner.temp }}/WolsCAPrintService.json
         run: |
-          python -c "import config, mqtt_service, diagnostics, file_watcher, hardware_dispatcher, pdf_processor, web_app, installer, main"
+          python -c "import config, version, mqtt_service, diagnostics, admin, updater, file_watcher, hardware_dispatcher, pdf_processor, web_app, installer, main"
 
       - name: Run the offline self-test phases
         working-directory: Wols_CA_PrintService
         env:
           WOLSCA_CONFIG: ${{ runner.temp }}/WolsCAPrintService.json
         run: |
-          python -c "import diagnostics; r = diagnostics.run(['system', 'config'], publish=False); print(r['summary'])"
+          python -c "import diagnostics; r = diagnostics.run(['system', 'config', 'admin'], publish=False); print(r['summary'])"
 
       - name: Validate the shipped configuration files
         run: |
           python -c "import json; json.load(open('Wols_CA_PrintService/WolsCAPrintService.json'))"
           python -c "import json; json.load(open('deploy/debian/WolsCAPrintService.linux.json'))"
+
+      - name: Check the release tooling
+        run: |
+          python tools/release.py --dry-run
+          git diff --exit-code -- VERSION BUILD_NUMBER .version-released changesFixes.md RELEASE_NOTES.md CHANGELOG.md
+
+      - name: Check the version files
+        run: |
+          python tools/bump_version.py --show
+          python -c "import sys; sys.path.insert(0, 'Wols_CA_PrintService'); import version; info = version.version_info(); print(info); assert info['build'] >= 381, info; assert info['version'] != '0.0.0', info"
 
   shell:
     name: Shell scripts
@@ -56,6 +66,10 @@ jobs:
         run: |
           bash -n deploy/debian/install.sh
           bash -n deploy/debian/uninstall.sh
+          bash -n deploy/debian/fix-permissions.sh
+          bash -n tools/install-git-hooks.sh
+          bash -n deploy/docker/entrypoint.sh
+          sh -n tools/git-hooks/pre-commit
 
       - name: Run shellcheck
-        run: shellcheck deploy/debian/install.sh deploy/debian/uninstall.sh
+        run: shellcheck deploy/debian/install.sh deploy/debian/uninstall.sh deploy/debian/fix-permissions.sh deploy/docker/entrypoint.sh tools/install-git-hooks.sh tools/git-hooks/pre-commit

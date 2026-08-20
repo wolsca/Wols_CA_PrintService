@@ -127,6 +127,8 @@ select { width: 100%; min-height: 48px; font-size: 17px; border-radius: 10px; pa
 pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.35 ui-monospace, monospace; max-height: 340px; overflow: auto; margin: 10px 0 0; }
 .tag { display: inline-block; border-radius: 8px; padding: 2px 8px; font-size: 14px; font-weight: 600; color: #fff; background: #7b8794; }
 .tag.pass { background: #27ae60; } .tag.fail { background: #eb5757; } .tag.warn { background: #f2994a; }
+input[type=text], input[type=password], input[type=number] { width: 100%; min-height: 44px; font-size: 16px; border-radius: 10px; padding: 8px; border: 1px solid #c7ccd1; margin-bottom: 10px; background: transparent; color: inherit; }
+.field { margin-bottom: 6px; } .field label { display: block; font-size: 14px; color: #7b8794; margin-bottom: 2px; }
 </style>
 </head>
 <body>
@@ -152,6 +154,34 @@ pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.35 ui-monospac
   <button class="ghost" id="toggleTest"></button>
   <pre id="testReport" hidden></pre>
 </div>
+<div class="card" id="updateCard">
+  <div class="row"><span id="lblUpdate" class="state" style="font-size:18px"></span><span class="tag" id="updateTag">-</span></div>
+  <div class="row"><span class="muted" id="lblInstalled"></span><span id="installedVersion">-</span></div>
+  <div class="row"><span class="muted" id="lblLatest"></span><span id="latestVersion">-</span></div>
+  <p id="updateDetail" class="muted"></p>
+  <button class="ghost" id="checkUpdate"></button>
+  <button id="installUpdate" hidden></button>
+  <button class="ghost" id="autoUpdate"></button>
+  <p id="testBuildDetail" class="muted"></p>
+  <button class="ghost" id="checkTestBuild"></button>
+  <button class="ghost" id="installTestBuild"></button>
+</div>
+<div class="card" id="adminCard">
+  <div class="row"><span id="lblAdmin" class="state" style="font-size:18px"></span><span class="tag" id="adminTag">-</span></div>
+  <div id="adminLock">
+    <p class="muted" id="adminHelp"></p>
+    <input type="password" id="adminToken" autocomplete="current-password">
+    <button class="ghost" id="adminUnlock"></button>
+  </div>
+  <div id="adminForm" hidden>
+    <div id="adminFields"></div>
+    <p id="adminDetail" class="muted"></p>
+    <button id="adminSave"></button>
+    <button class="ghost" id="adminRestart"></button>
+    <button class="ghost" id="adminReload"></button>
+    <button class="danger" id="adminLockAgain"></button>
+  </div>
+</div>
 <script>
 var T = __STRINGS__;
 var byId = function(id) { return document.getElementById(id); };
@@ -165,6 +195,19 @@ byId("lblTest").textContent = T.selfTestTitle || "Self-test";
 byId("runTest").textContent = T.selfTestRun || "Run self-test";
 byId("runChainTest").textContent = T.selfTestRunChain || "Run self-test incl. test print";
 byId("toggleTest").textContent = T.selfTestShow || "Show report";
+byId("lblUpdate").textContent = T.updateTitle || "Version and updates";
+byId("lblInstalled").textContent = T.updateInstalled || "Installed version";
+byId("lblLatest").textContent = T.updateLatest || "Latest version";
+byId("checkUpdate").textContent = T.updateCheck || "Check for update";
+byId("checkTestBuild").textContent = T.updateCheckTest || "Check for test build";
+byId("installTestBuild").textContent = T.updateInstallTest || "Install test build";
+byId("lblAdmin").textContent = T.adminTitle || "Administrator";
+byId("adminHelp").textContent = T.adminHelp || "Enter the administrator token to edit the configuration.";
+byId("adminUnlock").textContent = T.adminUnlock || "Unlock";
+byId("adminSave").textContent = T.adminSave || "Save configuration";
+byId("adminRestart").textContent = T.adminRestart || "Restart service";
+byId("adminReload").textContent = T.adminReload || "Discard changes";
+byId("adminLockAgain").textContent = T.adminLock || "Lock";
 
 function render(s) {
   var st = s.state;
@@ -211,13 +254,158 @@ byId("runTest").onclick = function() {
 };
 byId("runChainTest").onclick = function() {
   if (!confirm(T.selfTestConfirmChain || "This sends a test page to the printer. Continue?")) return;
-  post("/api/diagnostics/run?phases=system,config,cups,printer,network,chain");
+  post("/api/diagnostics/run?phases=system,config,admin,permissions,update,cups,printer,network,chain");
   setTimeout(pollTest, 500);
 };
 byId("toggleTest").onclick = function() {
   var pre = byId("testReport");
   pre.hidden = !pre.hidden;
   byId("toggleTest").textContent = pre.hidden ? (T.selfTestShow || "Show report") : (T.selfTestHide || "Hide report");
+};
+
+function renderUpdate(u) {
+  var tag = byId("updateTag");
+  var label = u.installing ? (T.updateInstalling || "Updating...")
+            : (u.checking ? (T.updateChecking || "Checking...")
+            : (u.update_available ? (T.updateAvailable || "Update available")
+                                  : (T.updateUpToDate || "Up to date")));
+  tag.textContent = label;
+  tag.className = "tag " + (u.update_available ? "warn" : (u.checking || u.installing ? "" : "pass"));
+  byId("installedVersion").textContent = u.installed_version || "-";
+  byId("latestVersion").textContent = u.latest_version || "-";
+  byId("updateDetail").textContent = (u.last_result || "") + (u.checked ? " (" + u.checked + ")" : "");
+  byId("checkUpdate").disabled = !!(u.checking || u.installing);
+  byId("installUpdate").hidden = !u.update_available;
+  byId("installUpdate").disabled = !!u.installing;
+  byId("installUpdate").textContent = (T.updateInstall || "Update now") + " (" + (u.latest_version || "") + ")";
+  byId("autoUpdate").textContent = (T.updateAuto || "Automatic updates") + ": "
+      + (u.auto_update ? (T.on || "on") : (T.off || "off"));
+  byId("testBuildDetail").textContent = u.test_result || (T.updateTestHint
+      || "Test builds come from the branch and are only installed on request.");
+  byId("installTestBuild").hidden = !u.test_version;
+  byId("installTestBuild").disabled = !!u.installing;
+  byId("checkTestBuild").disabled = !!(u.checking || u.installing);
+}
+
+function pollUpdate() {
+  fetch("/api/update", {cache: "no-store"}).then(function(r) { return r.json(); }).then(renderUpdate).catch(function(){});
+}
+
+byId("checkUpdate").onclick = function() {
+  post("/api/update/check");
+  setTimeout(pollUpdate, 500);
+};
+byId("installUpdate").onclick = function() {
+  if (!confirm(T.updateConfirm || "Install the new version now? The service restarts.")) return;
+  post("/api/update/install");
+  setTimeout(pollUpdate, 500);
+};
+byId("autoUpdate").onclick = function() {
+  post("/api/update/auto");
+  setTimeout(pollUpdate, 500);
+};
+byId("checkTestBuild").onclick = function() {
+  post("/api/update/check-test");
+  setTimeout(pollUpdate, 1500);
+};
+byId("installTestBuild").onclick = function() {
+  if (!confirm(T.updateConfirmTest || "Install the untested branch build? The service restarts.")) return;
+  post("/api/update/install-test");
+  setTimeout(pollUpdate, 1500);
+};
+
+/* --- administrator ------------------------------------------------- */
+var adminToken = "";
+var adminFields = [];
+
+function adminUrl(path) {
+  return path + (path.indexOf("?") < 0 ? "?" : "&") + "token=" + encodeURIComponent(adminToken);
+}
+
+function fieldInput(f) {
+  var id = "cfg_" + f.key.replace(/\\./g, "_");
+  var html = '<div class="field"><label for="' + id + '">' + f.label + "</label>";
+  if (f.type === "bool") {
+    html += '<select id="' + id + '"><option value="true"' + (f.value ? " selected" : "") + ">"
+         + (T.on || "on") + '</option><option value="false"' + (f.value ? "" : " selected") + ">"
+         + (T.off || "off") + "</option></select>";
+  } else if (f.type === "select") {
+    html += '<select id="' + id + '">';
+    f.options.forEach(function(o) {
+      html += '<option value="' + o + '"' + (String(f.value) === o ? " selected" : "") + ">" + o + "</option>";
+    });
+    html += "</select>";
+  } else if (f.type === "number") {
+    html += '<input type="number" id="' + id + '" value="' + (f.value === null ? "" : f.value) + '">';
+  } else {
+    html += '<input type="text" id="' + id + '" value="' + String(f.value === null ? "" : f.value).replace(/"/g, "&quot;") + '">';
+  }
+  return html + "</div>";
+}
+
+function renderAdmin(a) {
+  adminFields = a.fields || [];
+  byId("adminFields").innerHTML = adminFields.map(fieldInput).join("");
+  var tag = byId("adminTag");
+  tag.textContent = a.restart_required ? (T.adminRestartNeeded || "Restart required")
+                                       : (T.adminSaved || "Saved");
+  tag.className = "tag " + (a.restart_required ? "warn" : "pass");
+  byId("adminDetail").textContent = (a.last_result || "") + " " + (a.config_path || "");
+  byId("adminLock").hidden = true;
+  byId("adminForm").hidden = false;
+}
+
+function collectAdminValues() {
+  var values = {};
+  adminFields.forEach(function(f) {
+    var el = byId("cfg_" + f.key.replace(/\\./g, "_"));
+    if (el) values[f.key] = el.value;
+  });
+  return values;
+}
+
+function askRestart(result) {
+  byId("adminDetail").textContent = (result.errors && result.errors.length)
+      ? result.errors.join("; ") : (T.adminSavedOk || "Configuration saved.");
+  if (result.saved && confirm(T.adminAskRestart || "Configuration saved. Restart the service now?")) {
+    fetch(adminUrl("/api/admin/restart"), {method: "POST"});
+    byId("adminDetail").textContent = T.adminRestarting || "Restarting the service...";
+  }
+}
+
+byId("adminUnlock").onclick = function() {
+  adminToken = byId("adminToken").value;
+  fetch(adminUrl("/api/admin/config"), {cache: "no-store"}).then(function(r) {
+    if (!r.ok) throw new Error("denied");
+    return r.json();
+  }).then(renderAdmin).catch(function() {
+    byId("adminTag").textContent = T.adminDenied || "Access denied";
+    byId("adminTag").className = "tag fail";
+  });
+};
+byId("adminSave").onclick = function() {
+  fetch(adminUrl("/api/admin/config"), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({values: collectAdminValues()})
+  }).then(function(r) { return r.json(); }).then(askRestart).catch(function(){});
+};
+byId("adminRestart").onclick = function() {
+  if (!confirm(T.adminConfirmRestart || "Restart the service now?")) return;
+  fetch(adminUrl("/api/admin/restart"), {method: "POST"});
+  byId("adminDetail").textContent = T.adminRestarting || "Restarting the service...";
+};
+byId("adminReload").onclick = function() {
+  fetch(adminUrl("/api/admin/reload"), {method: "POST"})
+    .then(function(r) { return r.json(); }).then(renderAdmin).catch(function(){});
+};
+byId("adminLockAgain").onclick = function() {
+  adminToken = "";
+  byId("adminToken").value = "";
+  byId("adminForm").hidden = true;
+  byId("adminLock").hidden = false;
+  byId("adminTag").textContent = "-";
+  byId("adminTag").className = "tag";
 };
 
 byId("resume").onclick = function() { post("/api/resume"); };
@@ -228,6 +416,8 @@ poll();
 setInterval(poll, 2000);
 pollTest();
 setInterval(pollTest, 4000);
+pollUpdate();
+setInterval(pollUpdate, 10000);
 </script>
 </body>
 </html>
@@ -241,6 +431,37 @@ def render_web_page():
 
 class WebAppHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
+
+    def send_json(self, payload, status=200):
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def query_value(self, name):
+        return parse_qs(urlparse(self.path).query).get(name, [""])[0]
+
+    def request_body(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                return {}
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            return {}
+
+    def admin_authorised(self, body=None):
+        """The admin token from the query string or the JSON body."""
+        import admin
+        token = self.query_value("token") or (body or {}).get("token") \
+            or self.headers.get("X-Admin-Token", "")
+        if admin.token_valid(token):
+            return True
+        print("[Web] Administrator access denied.")
+        self.send_json({"error": "unauthorised"}, 403)
+        return False
 
     def client_token(self):
         cookies = self.headers.get("Cookie", "")
@@ -282,6 +503,21 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(data)
+        elif path == "/api/update":
+            import updater
+            payload = dict(updater.state)
+            payload["auto_update"] = bool(updater.update_config().get("auto_update"))
+            payload.pop("release_notes", None)   # keep the payload small for the browser
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(data)
+        elif path == "/api/admin/config":
+            import admin
+            if not self.admin_authorised():
+                return
+            self.send_json(admin.fields_payload())
         elif path == "/api/diagnostics":
             import diagnostics
             report = dict(diagnostics.last_report or {"result": "NONE"})
@@ -312,6 +548,54 @@ class WebAppHandler(BaseHTTPRequestHandler):
             selected = [p.strip() for p in phases.split(",") if p.strip()] or None
             print(f"[Web] Self-test requested ({selected or 'default phases'}).")
             diagnostics.run_async(selected)
+        elif path == "/api/update/check":
+            import updater
+            print("[Web] Update check requested.")
+            updater.check_async()
+        elif path == "/api/update/install":
+            import updater
+            print("[Web] Update installation requested.")
+            updater.install_async()
+        elif path == "/api/update/check-test":
+            import updater
+            print("[Web] Test build check requested.")
+            updater.check_test_build_async()
+        elif path == "/api/update/install-test":
+            import updater
+            print("[Web] Test build installation requested.")
+            updater.install_test_build_async()
+        elif path == "/api/admin/config":
+            import admin
+            body = self.request_body()
+            if not self.admin_authorised(body):
+                return
+            result = admin.apply_values(body.get("values") or {})
+            self.send_json(result)
+            return
+        elif path == "/api/admin/restart":
+            import admin
+            if not self.admin_authorised(self.request_body()):
+                return
+            print("[Web] Service restart requested by the administrator.")
+            admin.restart_async()
+            self.send_json({"restarting": True})
+            return
+        elif path == "/api/admin/reload":
+            import admin
+            if not self.admin_authorised(self.request_body()):
+                return
+            self.send_json(admin.reload_config())
+            return
+        elif path == "/api/update/auto":
+            import updater
+            requested = parse_qs(urlparse(self.path).query).get("enabled", [""])[0].lower()
+            if requested in ("1", "true", "on", "yes"):
+                enabled = True
+            elif requested in ("0", "false", "off", "no"):
+                enabled = False
+            else:
+                enabled = not bool(updater.update_config().get("auto_update"))
+            updater.set_auto_update(enabled)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

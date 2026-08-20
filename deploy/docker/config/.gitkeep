@@ -1,0 +1,3 @@
+# The container mounts this directory as /etc/wolsca.
+# On the first start the shipped default configuration is copied to
+# WolsCAPrintService.json here, so it can be edited like on the server.

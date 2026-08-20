@@ -118,6 +118,17 @@ def load_or_create_config():
             "cups_queue_name": "WolsCA_Booklet",
             "cups_share_on_network": True
         },
+        "update": {
+            "enabled": True,
+            "repository": "wolsca/Wols_CA_PrintService",
+            "branch": "main",
+            "channel": "release",
+            "allow_test_builds": True,
+            "check_interval_hours": 6,
+            "auto_update": False,
+            "source_directory": "/usr/local/src/wolsca-print-service",
+            "update_command": ""
+        },
         "settings": {
             "user": "WolsCADoublePrint",
             "password": "DefaultPassword",
@@ -131,12 +142,12 @@ def load_or_create_config():
             with open(CONFIG_PATH, 'r') as f:
                 config_data = json.load(f)
                 # Ensure all main sections exist
-                for section in ("settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake"):
+                for section in ("settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake", "update"):
                     if section not in config_data:
                         config_data[section] = default_config[section]
 
                 # Fill in missing sub-keys to keep backward compatibility
-                for section in ("hardware", "web", "notify", "history", "printers", "intake"):
+                for section in ("hardware", "web", "notify", "history", "printers", "intake", "update"):
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
         except Exception as e:

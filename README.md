@@ -77,6 +77,9 @@ Wols_CA_PrintService/
     file_watcher.py             Directory monitoring
     web_app.py                  Mobile interface hosting
     diagnostics.py              Self-test phases, command logging and MQTT report
+    admin.py                    Administrator configuration editor (web app and HA)
+    updater.py                  Release check, self-update, test builds and the HA update entity
+    version.py                  Reads VERSION and BUILD_NUMBER
     web_strings.json            UI translations
     WolsCAPrintService.json     Runtime configuration (development)
 ---
@@ -121,7 +124,7 @@ sudo systemctl restart wolsca-print-service
 | | `port` | Port for the web app (default: `8080`). |
 | | `language` | UI language: `en` (English) or `nl` (Dutch). |
 | | `public_url` | External URL for notification actions (e.g. `http://print.local:8080`). |
-| | `admin_token` | Token required for `POST /api/default` admin actions. |
+| | `admin_token` | Token required for `POST /api/default` and for the *Administrator* configuration editor. Empty means the editor stays locked. |
 | **notify** | `enabled` | Enable push notifications (default: `false`). |
 | | `url` | ntfy/Gotify server URL (default: `https://ntfy.sh`). |
 | | `topic` | Secret topic name for notifications. |
@@ -131,6 +134,15 @@ sudo systemctl restart wolsca-print-service
 | **history** | `enabled` | Enable job history tracking (default: `true`). |
 | | `max_entries` | Number of jobs to keep in history (default: `10`). |
 | | `file` | Path to the history JSON file (default: `job_history.json`). |
+| **update** | `enabled` | Enable the update check (default: `true`). |
+| | `repository` | GitHub repository to check, `owner/name` (default: `wolsca/Wols_CA_PrintService`). |
+| | `branch` | Branch used for test builds (default: `main`). |
+| | `channel` | `release` (default; only published GitHub releases trigger an update) or `branch` (treat the branch head as the version - for a test machine). |
+| | `allow_test_builds` | Allow the *Check/Install test build* buttons to use the branch head (default: `true`). |
+| | `check_interval_hours` | How often the service checks for a new release (default: `6`). |
+| | `auto_update` | Install a new **release** automatically (default: `false`). Never installs a test build. Toggled by the HA switch and the web app. |
+| | `source_directory` | Git checkout used for the update (default: `/usr/local/src/wolsca-print-service`). |
+| | `update_command` | Optional single command that replaces the default `git fetch/reset` + `install.sh`. |
 | **settings** | `print_mode` | `Bypass`, `Standard`, `Simplex`, `Duplex`, or `Booklet`. |
 | | `password` | **Change this**: Password for the MQTT broker. |
 
@@ -159,6 +171,16 @@ The web app is available at `http://<server>.local:8080/`. It uses mDNS/Bonjour 
 -   `POST /api/default`: Set admin default printer. Body: `{"printer": "<id>", "token": "<admin_token>"}`.
 -   `GET /api/diagnostics`: Returns the last self-test report (without the individual steps).
 -   `POST /api/diagnostics/run`: Starts a self-test. Optional `?phases=cups,printer` selects phases.
+-   `GET /api/update`: Installed version, latest release, whether an update is available, the test build state and the automatic update setting.
+-   `POST /api/update/check`: Checks GitHub for a new **release**.
+-   `POST /api/update/install`: Installs the latest release (the service restarts).
+-   `POST /api/update/check-test`: Checks the branch head for a test build (commit build).
+-   `POST /api/update/install-test`: Installs the branch head - for testing only.
+-   `POST /api/update/auto`: Toggles automatic updates; `?enabled=1` / `?enabled=0` sets it explicitly.
+-   `GET /api/admin/config`: The editable settings with their current values. Requires the admin token (`?token=`, JSON body or `X-Admin-Token`), otherwise `403`.
+-   `POST /api/admin/config`: Saves settings. Body: `{"token": "...", "values": {"web.title": "..."}}`. Answers with `saved`, `changed`, `errors` and `restart_required`.
+-   `POST /api/admin/restart`: Restarts the service (the *yes* answer to the restart question).
+-   `POST /api/admin/reload`: Re-reads the configuration file and drops the pending restart flag.
 -   `GET /qr`: Page showing a QR code for the web app URL.
 -   `GET /healthz`: Liveness check.
 
@@ -182,6 +204,9 @@ service log and to MQTT, and the whole run is aggregated into one report.
 | `system` | `uname -a`, `/etc/os-release`, `systemctl is-active` for the service, CUPS and Avahi, `df -h /var/spool`, `id -a`. |
 | `config` | Config file, drop/temp/error directories and their permissions, `ls -laR` of the drop folder, the resolved printer target and the intake queues. |
 | `cups` | `lpstat -t/-d/-o`, the sharing directives in `cupsd.conf`, all `cups-pdf*.conf` output paths, `cups-pdf_log`, `error_log`, and whether every configured queue really exists. |
+| `permissions` | Owner, group and mode of the configuration directory and file, of every spool/intake directory from the live configuration and of the history file, and whether the running process can really read and write them. Names `fix-permissions.sh` as the remedy. |
+| `admin` | Whether `web.admin_token` is set (the configuration editor stays locked without it), the current value of every editable setting, whether a restart is still pending and whether the configuration file is writable. |
+| `update` | The version files (`VERSION`, `BUILD_NUMBER`, commit hash), the `update` configuration, that the channel is release-only, whether GitHub can be reached, whether a newer **release** exists and whether the source checkout needed for the update button is present. |
 | `printer` | Ping of the printer, `ipptool get-printer-attributes` against `hardware.printer_uri`, `lpstat -v` and the details of the output queue. |
 | `network` | TCP reachability of the MQTT broker, MQTT connection state, the web app port, `avahi-browse -rt _ipp._tcp`, `ss -ltnp`. |
 | `chain` | End to end: submits a real job with `lp`, then waits up to 40 s for `cups-pdf` to drop a PDF in the watched folder, plus `lpstat -W completed -o` and the last service log lines. Not part of the default run because it prints. |
@@ -225,6 +250,163 @@ type: markdown
 content: |
   {{ state_attr('sensor.print_service_self_test', 'markdown') }}
 ```
+
+---
+
+## Versioning
+
+The version is `x.y.<commit number>`, for example **1.4.381**, and lives in two plain
+text files in the repository root:
+
+| File | Meaning | Who changes it |
+| :--- | :--- | :--- |
+| `VERSION` | The release `x.y`: `x` is the main release, `y` the minor release. | `x` by hand, `y` by the release tool |
+| `BUILD_NUMBER` | The commit number, starting at **381**. | Raised by one on every commit (git hook) |
+
+`Wols_CA_PrintService/version.py` reads both files and is the single source of truth:
+`mqtt_service.SERVICE_VERSION`, the MQTT status payload, the Home Assistant device
+(`sw_version`), the web app and the self-test all use it.
+
+### The commit number
+
+Enable the git hook once per checkout; it raises `BUILD_NUMBER` and stages it with
+every commit:
+
+```bash
+./tools/install-git-hooks.sh                   # Linux/macOS
+powershell -File tools\install-git-hooks.ps1   # Windows
+```
+
+### Releasing
+
+```bash
+python tools/bump_version.py --show            # 1.4.381
+python tools/bump_version.py --release         # 1.4 -> 1.5 (y + 1)
+python tools/bump_version.py --release --major # 1.5 -> 2.0 (x + 1, y = 0)
+```
+
+The rule: when `x` was raised - by hand in `VERSION` or with `--major` - the minor
+release restarts at `0`; otherwise it becomes the current `y + 1`. The release the
+minor counter was last bumped for is remembered in `.version-released`.
+
+### Release notes: `changesFixes.md`
+
+Everything that changes or is fixed is written to **`changesFixes.md`** in the
+repository root while working. That file therefore always describes exactly the
+*unreleased* work, and it is what the release is announced with:
+
+```bash
+python tools/release.py --dry-run   # show the section that would be written
+python tools/release.py             # cut the release
+python tools/release.py --major     # raise x, y back to 0
+python tools/release.py --tag       # also create the annotated git tag vX.Y
+```
+
+The tool
+
+1. computes the new release number,
+2. prepends `## x.y.<build> - <date>` plus the collected notes to
+   **`RELEASE_NOTES.md`** - which is never rewritten, only prepended to, so it
+   stays 100% complete - and to `CHANGELOG.md`,
+3. writes `VERSION` and `.version-released`,
+4. **empties `changesFixes.md`** back to its template.
+
+Use that section as the body of the GitHub release; the update entity in Home
+Assistant shows it as the release notes. `tools/release.py` refuses to run while
+`changesFixes.md` only holds the `(none yet)` placeholders (override with
+`--allow-empty`).
+
+### Check for updates and update
+
+**Only published releases count.** The update check compares the installed version
+with the latest **GitHub release** and installs exactly that tag, so an ordinary
+commit never makes Home Assistant offer an update. When no release exists yet the
+check says so and reports *no* update - it deliberately does not fall back to the
+branch.
+
+A commit build can still be installed on purpose, as a **test build**: it is read
+from `VERSION`/`BUILD_NUMBER` on `update.branch` and only ever checked or installed
+when the corresponding button is pressed (`update.allow_test_builds`, default
+`true`, switches the possibility off).
+
+```bash
+... main.py --version                # print release, commit number and git hash
+... main.py --check-update           # exit code 1 when a newer release exists
+... main.py --update                 # install that release (--force reinstalls)
+... main.py --check-update --test     # what is on the branch (test build)
+... main.py --update --test           # install the branch head - testing only
+```
+
+The service also checks by itself every `update.check_interval_hours`, and installs
+the new **release** straight away when `update.auto_update` is on. Automatic updates
+never install a test build.
+
+- **Web app**: the *Version and updates* card shows the installed and the latest
+  version and has *Check for update*, *Update now*, *Automatic updates* plus
+  *Check for test build* and *Install test build*.
+- **Home Assistant**: `update.print_service_update` (a real update entity with an
+  *Install* button and the release notes), `sensor.print_service_version`,
+  `sensor.print_service_test_build`, the *Check for Print Service Update*,
+  *Install Print Service Update*, *Check for Print Service Test Build* and
+  *Install Print Service Test Build* buttons and the *Print Service Automatic
+  Update* switch.
+- **MQTT**: publish `CHECK_UPDATE`, `INSTALL_UPDATE`, `CHECK_TEST_BUILD`,
+  `INSTALL_TEST_BUILD`, `AUTOUPDATE_ON` or `AUTOUPDATE_OFF` to
+  `<topic_prefix>/command`; the state is retained on `<topic_prefix>/update/state`
+  and `<topic_prefix>/update/auto`.
+
+The update runs `git fetch --all --tags` + `git reset --hard <release tag>` (or
+`origin/<branch>` for a test build) in `update.source_directory` and then
+`deploy/debian/install.sh`, which reinstalls the files and restarts the unit. So the
+server needs a git checkout of the repository - by default
+`/usr/local/src/wolsca-print-service` - and the service must run as root (it does)
+for `install.sh` to succeed.
+
+---
+
+## Administrator configuration editor
+
+The configuration file stays the source of truth, but the settings that are
+actually tuned can be changed without a shell - by the administrator only.
+
+- **Web app**: the *Administrator* card is locked until the token from
+  `web.admin_token` is entered. It then shows one field per editable setting,
+  *Save configuration*, and asks **"Configuration saved. Restart the service now?"**
+  - answer *yes* and the service restarts, *no* and the change waits for the next
+  restart. *Discard changes* re-reads the file, *Lock* closes the card again.
+  While `web.admin_token` is empty the editor cannot be opened at all.
+- **Home Assistant**: a separate device *Wols CA Print Service Admin* carries one
+  entity per setting (`text`, `number`, `switch` or `select`, all in the *config*
+  category), plus `binary_sensor` *Restart Required* - the same question in HA form -
+  and the *Restart Print Service* and *Discard Configuration Changes* buttons.
+  Keeping it as its own device means it can be hidden from, or restricted to,
+  specific Home Assistant users.
+- **MQTT**: values are retained on `<prefix>/admin/value/<key>` and set by publishing
+  to `<prefix>/admin/set/<key>` (for example `<prefix>/admin/set/web_title`);
+  `RESTART_SERVICE` and `RELOAD_CONFIG` on `<prefix>/command` do the rest.
+
+Every value is validated (type, range, allowed options) before it is written, a
+`.bak` of the configuration is kept, and only the whitelisted keys in
+`admin.FIELDS` can be edited - paths and intake queues still need the file, which
+keeps a typo from breaking the print chain.
+
+---
+
+## Local test container (Docker Desktop)
+
+`deploy/docker/` builds a container that runs the service exactly as the Debian
+server does - same packages, same `installer.py`, same CUPS intake queues, same
+`/etc/wolsca/WolsCAPrintService.json`, same spool directories. The base image is the
+Debian flavour of the Home Assistant base images, so the same image can later be
+published as a Home Assistant add-on.
+
+```powershell
+.\tools\run-local-test.ps1            # start it, web app on http://localhost:8080/
+.\tools\run-local-test.ps1 -SelfTest  # run every self-test phase and exit
+.\tools\run-local-test.ps1 -Shell     # shell inside, CUPS running
+```
+
+See `deploy/docker/README.md` for the details.
 
 ---
 
@@ -382,11 +564,17 @@ Notes:
 ```
 CMakeLists.txt                                  CLion/CMake project model (no compilation)
 requirements.txt                                Python dependencies (paho-mqtt, watchdog, pypdf)
+VERSION                                         Release 'x.y' (x by hand, y by the release tool)
+BUILD_NUMBER                                    Commit number, raised on every commit
+tools/bump_version.py                           Raises the commit number and the release number
+tools/git-hooks/pre-commit                      Raises BUILD_NUMBER on every commit
+tools/install-git-hooks.sh / .ps1               Enables the hooks (core.hooksPath)
 LICENSE                                         MIT license
 .run/                                           Shared CLion run configurations
 docs/USER_GUIDE.md                              Per-device usage guide
 deploy/debian/                                  Debian/Ubuntu deployment (systemd, CUPS, Avahi)
     install.sh / uninstall.sh                   Installer and remover
+    fix-permissions.sh                          Repairs owner/group/mode of all locations
     wolsca-print-service.service                systemd unit
     WolsCAPrintService.linux.json                Default Linux configuration
 Wols_CA_PrintService/

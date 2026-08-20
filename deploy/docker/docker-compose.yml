@@ -1,0 +1,54 @@
+# Wols CA Print Service - local test stack for Docker Desktop (Debian image).
+#
+# Run from the repository root:
+#   docker compose -f deploy/docker/docker-compose.yml up --build
+#
+# The web app is then on http://localhost:8080/ and CUPS on
+# http://localhost:6631/ (port 631 inside the container, so it does not clash
+# with a CUPS installation on the host).
+#
+# The configuration is a normal bind mount, so the very same
+# WolsCAPrintService.json is used as on the Debian server; edit it in
+# deploy/docker/config/ or through the administrator card in the web app.
+#
+# Copy .env.local.example to .env.local first: it carries the broker address, the
+# MQTT credentials and the admin token and is git-ignored.
+services:
+  print-service:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.debian
+    image: wolsca-print-service:test
+    container_name: wolsca-print-test
+    ports:
+      - "8080:8080"
+      - "6631:631"
+    # Broker address, credentials and admin token; git-ignored.
+    env_file:
+      - .env.local
+    environment:
+      # inotify is unreliable on bind mounts from Windows: poll instead.
+      WOLSCA_POLL_WATCHER: "1"
+    volumes:
+      - ./config:/etc/wolsca
+      - spool:/var/spool/wolsca
+    command: ["service"]
+
+  # One-shot self-test: docker compose -f ... run --rm self-test
+  self-test:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.debian
+    image: wolsca-print-service:test
+    profiles: ["test"]
+    env_file:
+      - .env.local
+    environment:
+      WOLSCA_POLL_WATCHER: "1"
+    volumes:
+      - ./config:/etc/wolsca
+      - spool:/var/spool/wolsca
+    command: ["self-test"]
+
+volumes:
+  spool:

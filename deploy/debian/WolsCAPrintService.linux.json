@@ -88,6 +88,17 @@
         "cups_queue_name": "WolsCA_Booklet",
         "cups_share_on_network": true
     },
+    "update": {
+        "enabled": true,
+        "repository": "wolsca/Wols_CA_PrintService",
+        "branch": "main",
+        "channel": "release",
+        "allow_test_builds": true,
+        "check_interval_hours": 6,
+        "auto_update": false,
+        "source_directory": "/usr/local/src/wolsca-print-service",
+        "update_command": ""
+    },
     "settings": {
         "user": "WolsCADoublePrint",
         "password": "ChangeMe",

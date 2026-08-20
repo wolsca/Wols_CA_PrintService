@@ -45,7 +45,7 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC_DIR="${REPO_ROOT}/Wols_CA_PrintService"
 
-echo "==> 1/7 Installing OS packages and managing port 631"
+echo "==> 1/8 Installing OS packages and managing port 631"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 
@@ -71,7 +71,7 @@ fi
 # Bonjour/mDNS discovery
 systemctl enable --now avahi-daemon || true
 
-echo "==> 2/7 Creating service user '${SERVICE_USER}'"
+echo "==> 2/8 Creating service user '${SERVICE_USER}'"
 if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
     useradd --system --home-dir "${INSTALL_DIR}" --shell /usr/sbin/nologin \
             --groups lp "${SERVICE_USER}"
@@ -79,9 +79,9 @@ else
     usermod -aG lp "${SERVICE_USER}" || true
 fi
 
-echo "==> 3/7 Creating directories"
+echo "==> 3/8 Creating directories"
 install -d -o root -g root -m 0755 "${INSTALL_DIR}"
-install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
+install -d -o root -g root -m 0755 "${CONFIG_DIR}"
 for dir in PrintFileDrop PrintTemp PrintError; do
     install -d -o "${SERVICE_USER}" -g lp -m 2775 "${SPOOL_DIR}/${dir}"
 done
@@ -92,7 +92,8 @@ done
 chown "${SERVICE_USER}:lp" "${SPOOL_DIR}"
 chmod 2775 "${SPOOL_DIR}"
 
-echo "==> 4/7 Copying application files"
+echo "==> 4/8 Copying application files"
+install -o root -g root -m 0644 "${SRC_DIR}/admin.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/config.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/diagnostics.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
@@ -102,22 +103,29 @@ install -o root -g root -m 0644 "${SRC_DIR}/ipp_server.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/mqtt_service.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/pdf_processor.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/updater.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/version.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/web_app.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/web_strings.json" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${REPO_ROOT}/requirements.txt" "${INSTALL_DIR}/"
 
+# The version files travel next to the modules, so the service reports the right
+# version when it runs from /opt instead of from the checkout.
+install -o root -g root -m 0644 "${REPO_ROOT}/VERSION" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${REPO_ROOT}/BUILD_NUMBER" "${INSTALL_DIR}/"
+
+install -o root -g root -m 0755 "${REPO_ROOT}/deploy/debian/fix-permissions.sh" "${INSTALL_DIR}/"
+
 if [[ ! -f "${CONFIG_DIR}/WolsCAPrintService.json" ]]; then
-    install -o root -g "${SERVICE_USER}" -m 0666 \
+    install -o root -g root -m 0664 \
         "${REPO_ROOT}/deploy/debian/WolsCAPrintService.linux.json" \
         "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Installed default configuration - review ${CONFIG_DIR}/WolsCAPrintService.json"
 else
-    # Correct permissions on existing file to prevent Errno 13
-    chmod 0666 "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Existing configuration kept: ${CONFIG_DIR}/WolsCAPrintService.json"
 fi
 
-echo "==> 5/7 Creating the Python virtualenv"
+echo "==> 5/8 Creating the Python virtualenv"
 if [[ ! -x "${INSTALL_DIR}/venv/bin/python" ]]; then
     python3 -m venv "${INSTALL_DIR}/venv"
 fi
@@ -126,7 +134,7 @@ fi
 "${INSTALL_DIR}/venv/bin/pip" install segno || \
     echo "    (optional 'segno' package not installed; /qr shows the plain URL)"
 
-echo "==> 6/7 Configuring Architecture-Specific Network Settings"
+echo "==> 6/8 Configuring Architecture-Specific Network Settings"
 mkdir -p /etc/systemd/system/${SERVICE_NAME}.service.d
 
 if [[ "${WITH_CUPS}" == "yes" ]]; then
@@ -161,12 +169,17 @@ EOF
     systemctl reload-or-restart avahi-daemon || true
 fi
 
-echo "==> 7/7 Registering the systemd unit"
+echo "==> 7/8 Registering the systemd unit"
 install -o root -g root -m 0644 \
     "${REPO_ROOT}/deploy/debian/${SERVICE_NAME}.service" \
     "/etc/systemd/system/${SERVICE_NAME}.service"
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
+
+echo "==> 8/8 Applying ownership and permissions to all locations"
+# Runs last so it also covers what --install-printer just created or rewrote.
+bash "${REPO_ROOT}/deploy/debian/fix-permissions.sh"
+
 systemctl restart "${SERVICE_NAME}.service"
 
 WEB_PORT="$(python3 - "${CONFIG_DIR}/WolsCAPrintService.json" <<'PY' 2>/dev/null || echo 8080
@@ -187,7 +200,8 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: 
 fi
 
 echo
-echo "Installation complete."
+INSTALLED_VERSION="$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo '0.0').$(cat "${REPO_ROOT}/BUILD_NUMBER" 2>/dev/null || echo 0)"
+echo "Installation complete (version ${INSTALLED_VERSION})."
 echo "  Status:  systemctl status ${SERVICE_NAME}"
 echo "  Logs:    journalctl -u ${SERVICE_NAME} -f"
 echo "  Config:  ${CONFIG_DIR}/WolsCAPrintService.json"

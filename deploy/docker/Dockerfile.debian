@@ -1,0 +1,87 @@
+# Wols CA Print Service - local test container (Debian).
+#
+# The base image is the *Debian* flavour of the Home Assistant base images, so
+# this single Dockerfile serves both purposes:
+#
+#   * a realistic local test environment on Docker Desktop, and
+#   * a Home Assistant add-on later on (add-ons do not have to be Alpine; the
+#     Supervisor builds whatever BUILD_FROM points at).
+#
+# Debian is used on purpose: it carries the real `printer-driver-cups-pdf`
+# package, so the container runs the very same packages, the same installer, the
+# same CUPS intake queues, the same /etc/wolsca/WolsCAPrintService.json and the
+# same /var/spool/wolsca directories as the service on the Debian server.
+# Nothing about the configuration differs.
+#
+# Build and run from the repository root:
+#   docker build -f deploy/docker/Dockerfile.debian -t wolsca-print-service:test .
+#   docker run --rm -p 8080:8080 -p 6631:631 wolsca-print-service:test
+#
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
+
+FROM ${BUILD_FROM}
+
+ENV WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json \
+    WOLSCA_POLL_WATCHER=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PATH="/opt/wolsca-print-service/venv/bin:${PATH}"
+
+# Exactly the packages deploy/debian/install.sh --with-cups installs, plus
+# python3-venv, iputils-ping and iproute2 for the self-test phases.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip \
+        cups printer-driver-cups-pdf cups-ipp-utils cups-client \
+        avahi-daemon avahi-utils dbus \
+        ghostscript poppler-utils \
+        bash git curl ca-certificates tzdata \
+        iputils-ping iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/wolsca-print-service
+
+COPY requirements.txt ./
+RUN python3 -m venv venv \
+    && venv/bin/pip install --no-cache-dir --upgrade pip \
+    && venv/bin/pip install --no-cache-dir -r requirements.txt
+
+COPY Wols_CA_PrintService/*.py ./
+COPY Wols_CA_PrintService/web_strings.json ./
+COPY VERSION BUILD_NUMBER ./
+COPY deploy/debian/WolsCAPrintService.linux.json /opt/wolsca-print-service/WolsCAPrintService.default.json
+COPY deploy/debian/fix-permissions.sh ./
+COPY deploy/docker/entrypoint.sh /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh fix-permissions.sh \
+    && mkdir -p /etc/wolsca \
+                /var/spool/wolsca/PrintFileDrop/booklet \
+                /var/spool/wolsca/PrintFileDrop/duplex \
+                /var/spool/wolsca/PrintFileDrop/simplex \
+                /var/spool/wolsca/PrintTemp \
+                /var/spool/wolsca/PrintError \
+                /run/dbus
+
+EXPOSE 8080 631
+
+ARG BUILD_ARCH=amd64
+ARG BUILD_VERSION="0.0.0"
+ARG BUILD_REF=""
+LABEL \
+    io.hass.type="addon" \
+    io.hass.name="Wols CA Print Service" \
+    io.hass.description="Booklet and double-sided print service with CUPS intake queues." \
+    io.hass.arch="${BUILD_ARCH}" \
+    io.hass.version="${BUILD_VERSION}" \
+    org.opencontainers.image.title="Wols CA Print Service" \
+    org.opencontainers.image.description="Print service with CUPS intake queues, web app and MQTT/Home Assistant integration." \
+    org.opencontainers.image.version="${BUILD_VERSION}" \
+    org.opencontainers.image.revision="${BUILD_REF}" \
+    org.opencontainers.image.source="https://github.com/wolsca/Wols_CA_PrintService" \
+    org.opencontainers.image.licenses="MIT"
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -fsS -o /dev/null http://127.0.0.1:8080/ || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["service"]

@@ -80,6 +80,17 @@ def run_root_command(args, description):
         print(f"[Error] {description} failed (exit code {e.returncode}).")
     return False
 
+def run_service_command(args, description):
+    """Like run_root_command, but silently skipped without systemd.
+
+    The Alpine test container runs cupsd and avahi-daemon directly, so there is
+    no systemctl; the configuration itself is identical to Debian.
+    """
+    if args and args[0] == "systemctl" and not shutil.which("systemctl"):
+        print(f"[Admin] {description}: skipped, no systemd in this environment.")
+        return True
+    return run_root_command(args, description)
+
 def configure_cups_pdf(drop_dir, conf_path="/etc/cups/cups-pdf.conf", template=None):
     if not os.path.exists(conf_path):
         source = template or "/etc/cups/cups-pdf.conf"
@@ -314,8 +325,8 @@ def advertise_web_app_over_mdns():
         os.makedirs(os.path.dirname(service_file), exist_ok=True)
         with open(service_file, "w") as f:
             f.write(content)
-        run_root_command(["systemctl", "enable", "--now", "avahi-daemon"], "Enabling Avahi daemon")
-        run_root_command(["systemctl", "reload-or-restart", "avahi-daemon"], "Publishing web app over mDNS")
+        run_service_command(["systemctl", "enable", "--now", "avahi-daemon"], "Enabling Avahi daemon")
+        run_service_command(["systemctl", "reload-or-restart", "avahi-daemon"], "Publishing web app over mDNS")
     except Exception as e:
         print(f"[Warning] Could not write {service_file}: {e}")
 
@@ -334,15 +345,22 @@ def perform_cups_printer_install():
     drop_dir = config.DROP_DIR
 
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    print("[Admin] 1/6: Installing CUPS, cups-pdf and Avahi (Debian/Ubuntu)...")
-    try:
-        subprocess.run(["apt-get", "update"], check=True, env=env)
-        subprocess.run(["apt-get", "install", "-y", "cups", "printer-driver-cups-pdf",
-                        "cups-ipp-utils", "avahi-daemon", "avahi-utils"],
-                       check=True, env=env)
-    except Exception as e:
-        print(f"[Error] Package installation failed: {e}")
-        sys.exit(1)
+    if shutil.which("apt-get"):
+        print("[Admin] 1/6: Installing CUPS, cups-pdf and Avahi (Debian/Ubuntu)...")
+        try:
+            subprocess.run(["apt-get", "update"], check=True, env=env)
+            subprocess.run(["apt-get", "install", "-y", "cups", "printer-driver-cups-pdf",
+                            "cups-ipp-utils", "avahi-daemon", "avahi-utils"],
+                           check=True, env=env)
+        except Exception as e:
+            print(f"[Error] Package installation failed: {e}")
+            sys.exit(1)
+    else:
+        # Alpine test container: the packages are part of the image already.
+        print("[Admin] 1/6: No apt-get here, assuming CUPS and cups-pdf are installed.")
+        if not shutil.which("lpadmin"):
+            print("[Error] CUPS is not installed and cannot be installed automatically.")
+            sys.exit(1)
 
     print("[Admin] 2/6: Configuring cups-pdf output directory...")
     os.makedirs(drop_dir, exist_ok=True)
@@ -366,8 +384,8 @@ def perform_cups_printer_install():
     if share:
         print("[Admin] 5/6: Publishing the queues on the local network...")
         enable_network_sharing()
-        run_root_command(["systemctl", "enable", "--now", "avahi-daemon"], "Enabling Avahi announcements")
-        run_root_command(["systemctl", "restart", "cups"], "Restarting CUPS")
+        run_service_command(["systemctl", "enable", "--now", "avahi-daemon"], "Enabling Avahi announcements")
+        run_service_command(["systemctl", "restart", "cups"], "Restarting CUPS")
 
     print("[Admin] 6/6: Advertising the web app over mDNS...")
     advertise_web_app_over_mdns()
