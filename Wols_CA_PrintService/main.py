@@ -11,10 +11,10 @@ import hardware_dispatcher
 import pdf_processor
 import file_watcher
 import web_app
-import installer
+import ipp_server
 from watchdog.observers import Observer
 
-SERVICE_VERSION = "1.4.3"
+SERVICE_VERSION = "2.0.0"
 shutdown_event = threading.Event()
 job_queue = queue.Queue()
 queue_lock = threading.Lock()
@@ -117,7 +117,7 @@ def process_print_job(filepath, intake=None):
             mqtt_service.set_state("PROCESSING", f"{pages} pages become {sheets} sheet(s)", pages=pages, sheets=sheets)
 
             if duplex or pages < 2:
-                # Bugfix: Prevent mechanical hardware flip for single-page documents
+                # Bugfix: Dynamically downgrade hardware duplexing for single-page documents
                 actual_sides = "two-sided-long-edge" if (duplex and pages > 1) else "one-sided"
 
                 hardware_dispatcher.dispatch_to_printer_ipp(filepath, "Duplex", target, side="both",
@@ -200,10 +200,11 @@ def start_service():
 
     print(f"\n===================================================")
     print(f"  Wols CA Print Service {SERVICE_VERSION} started!")
-    print(f"  Modular Architecture - Core orchestrator online")
+    print(f"  Zero-Trust Architecture - Native IPP Server active")
     print(f"===================================================\n")
 
-    threading.Thread(target=installer.check_virtual_printer, daemon=True).start()
+    # Start Native IPP Server directly in Python
+    threading.Thread(target=ipp_server.start_server, args=(shutdown_event,), daemon=True).start()
 
     mqtt_service.start_mqtt()
     httpd = web_app.start_web_app()
@@ -234,13 +235,4 @@ def start_service():
     print("[System] Service successfully shut down.")
 
 if __name__ == "__main__":
-    if "--install-printer" in sys.argv:
-        if platform.system() == "Linux":
-            installer.perform_cups_printer_install()
-        elif platform.system() == "Windows":
-            installer.perform_admin_printer_install()
-        else:
-            print(f"[Error] Printer deployment is not supported on {platform.system()}.")
-            sys.exit(1)
-    else:
-        start_service()
+    start_service()

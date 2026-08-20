@@ -26,6 +26,7 @@ add_custom_target(sources SOURCES
         "${SERVICE_DIR}/hardware_dispatcher.py"
         "${SERVICE_DIR}/file_watcher.py"
         "${SERVICE_DIR}/installer.py"
+        "${SERVICE_DIR}/ipp_server.py"
         "${SERVICE_DIR}/web_app.py"
         "${SERVICE_DIR}/web_strings.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/requirements.txt"
