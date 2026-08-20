@@ -43,6 +43,7 @@ def load_or_create_config():
         },
         "hardware": {
             "printer_uri": "ipps://192.168.101.251:443/ipp/print",
+            "cups_queue_name": "WolsCA_Output",
             "flip_instruction": "",
             "flip_timeout_seconds": 1800
         },
@@ -82,8 +83,8 @@ def load_or_create_config():
                     "host": "192.168.101.251",
                     "port": 9100,
                     "duplex": False,
-                    "dispatch": "raw",
-                    "cups_queue": "",
+                    "dispatch": "cups",
+                    "cups_queue": "WolsCA_Output",
                     "flip_instruction": ""
                 }
             ]

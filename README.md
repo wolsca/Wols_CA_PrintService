@@ -109,7 +109,8 @@ sudo systemctl restart wolsca-print-service
 | **paths** | `drop_directory` | Folder watched for new PDF files. |
 | **intake** | `enabled` | Enable triple-queue intake (default: `true`). |
 | | `queues` | Array of intake queues: `[{id, cups_queue, description, print_mode, directory}]`. |
-| **hardware** | `printer_uri` | Legacy fallback URI for the physical printer. |
+| **hardware** | `printer_uri` | URI of the physical printer (e.g. `ipps://192.168.1.10:443/ipp/print`). The installer creates the output queue from it. |
+| | `cups_queue_name` | Name of the CUPS output queue for the physical printer (default: `WolsCA_Output`). |
 | | `flip_instruction` | Global override for the paper flip instruction text. |
 | | `flip_timeout_seconds` | Auto-cancel job if no flip confirmation (default: `1800`, 0 to disable). |
 | **printers** | `default` | ID of the system-wide default printer. |

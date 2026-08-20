@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 Refactored the monolithic Wols_CA_PrintService.py script into a highly readable, modular architecture (main.py, pdf_processor.py, etc.) for improved maintainability.
 
+### Fixed
+- Jobs disappeared silently ("printers visible, nothing prints"):
+  - The folder watcher now reacts to moved and closed files as well, not only created ones.
+    `cups-pdf` renders into its own spool folder and *moves* the finished PDF into the drop
+    directory, which inotify reports as a move, so nothing was ever queued.
+  - Intake directories are watched recursively and rescanned every 15 seconds as a safety net
+    (inotify is unreliable on LXC/overlayfs and bind mounts). Set `WOLSCA_POLL_WATCHER=1`
+    to force the polling observer.
+  - Enqueueing is now idempotent, so the same file cannot be queued twice.
+- Installer: `cupsctl --share-printers --remote-any` returns "Not Implemented" on some CUPS 2.4
+  builds. The installer now falls back to writing `Listen *:631`, `Browsing On`,
+  `BrowseLocalProtocols dnssd`, `DefaultShared Yes` and `Allow @LOCAL` into `/etc/cups/cupsd.conf`.
+- Physical output: raw PDF bytes sent to TCP 9100 are silently discarded by printers without
+  native PDF direct print. The installer now creates a driverless output queue
+  (`hardware.cups_queue_name`, default `WolsCA_Output`) from `hardware.printer_uri` and switches
+  the default printer target to `dispatch: cups`, which also enables real page progress and duplex.
+
 ### Changed
 Added: Extracted hard-coded UI texts into web_strings.json to facilitate easy translations.
 

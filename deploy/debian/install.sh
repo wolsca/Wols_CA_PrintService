@@ -8,7 +8,7 @@
 #
 # Tested on Debian 12/13 and Ubuntu 22.04/24.04 (any apt based derivative).
 #
-# Usage: sudo ./deploy/debian/install.sh
+# Usage: sudo ./deploy/debian/install.sh [--with-cups]
 #
 set -euo pipefail
 
@@ -17,6 +17,14 @@ INSTALL_DIR="/opt/${SERVICE_NAME}"
 CONFIG_DIR="/etc/wolsca"
 SPOOL_DIR="/var/spool/wolsca"
 SERVICE_USER="root"
+WITH_CUPS="no"
+
+for arg in "$@"; do
+    case "${arg}" in
+        --with-cups) WITH_CUPS="yes" ;;
+        *) echo "Unknown option: ${arg}" >&2; exit 1 ;;
+    esac
+done
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "This installer must run as root (use sudo)." >&2
@@ -37,19 +45,30 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC_DIR="${REPO_ROOT}/Wols_CA_PrintService"
 
-echo "==> 1/7 Installing OS packages and freeing IPP port 631"
+echo "==> 1/7 Installing OS packages and managing port 631"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils
 
-# Ensure legacy CUPS is stopped and disabled so our Native Python IPP Server can bind to port 631
-if systemctl is-active --quiet cups; then
-    echo "    Stopping legacy CUPS service to free port 631..."
-    systemctl stop cups cups.socket || true
-    systemctl disable cups cups.socket || true
+if [[ "${WITH_CUPS}" == "yes" ]]; then
+    echo "    [Hybrid Mode] Installing CUPS and dependencies..."
+    apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils cups printer-driver-cups-pdf cups-client cups-ipp-utils
+
+    # Ensure CUPS is running and shared to the network
+    systemctl enable --now cups
+    cupsctl --share-printers --remote-any || true
+else
+    echo "    [Native Mode] Installing base dependencies..."
+    apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils
+
+    # Ensure legacy CUPS is stopped so Python can bind to port 631
+    if systemctl is-active --quiet cups; then
+        echo "    Stopping legacy CUPS service to free port 631..."
+        systemctl stop cups cups.socket || true
+        systemctl disable cups cups.socket || true
+    fi
 fi
 
-# Bonjour/mDNS makes the web app and the native print queue discoverable as <host>.local.
+# Bonjour/mDNS discovery
 systemctl enable --now avahi-daemon || true
 
 echo "==> 2/7 Creating service user '${SERVICE_USER}'"
@@ -74,7 +93,6 @@ chown "${SERVICE_USER}:lp" "${SPOOL_DIR}"
 chmod 2775 "${SPOOL_DIR}"
 
 echo "==> 4/7 Copying application files"
-# Copy all modular components
 install -o root -g root -m 0644 "${SRC_DIR}/config.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/hardware_dispatcher.py" "${INSTALL_DIR}/"
@@ -88,12 +106,13 @@ install -o root -g root -m 0644 "${SRC_DIR}/web_strings.json" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${REPO_ROOT}/requirements.txt" "${INSTALL_DIR}/"
 
 if [[ ! -f "${CONFIG_DIR}/WolsCAPrintService.json" ]]; then
-    install -o root -g "${SERVICE_USER}" -m 0660 \
+    install -o root -g "${SERVICE_USER}" -m 0666 \
         "${REPO_ROOT}/deploy/debian/WolsCAPrintService.linux.json" \
         "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Installed default configuration - review ${CONFIG_DIR}/WolsCAPrintService.json"
 else
-    chmod 0660 "${CONFIG_DIR}/WolsCAPrintService.json"
+    # Correct permissions on existing file to prevent Errno 13
+    chmod 0666 "${CONFIG_DIR}/WolsCAPrintService.json"
     echo "    Existing configuration kept: ${CONFIG_DIR}/WolsCAPrintService.json"
 fi
 
@@ -106,9 +125,23 @@ fi
 "${INSTALL_DIR}/venv/bin/pip" install segno || \
     echo "    (optional 'segno' package not installed; /qr shows the plain URL)"
 
-echo "==> 6/7 Configuring mDNS (Avahi) for Native IPP Discovery"
-# Broadcasts the native Python IPP server to Apple iOS and Android devices
-cat <<EOF > /etc/avahi/services/wolsca-ipp.service
+echo "==> 6/7 Configuring Architecture-Specific Network Settings"
+mkdir -p /etc/systemd/system/${SERVICE_NAME}.service.d
+
+if [[ "${WITH_CUPS}" == "yes" ]]; then
+    echo "    [Hybrid Mode] Deploying CUPS queues and cleaning up native overrides..."
+    rm -f /etc/avahi/services/wolsca-ipp.service
+    rm -f /etc/systemd/system/${SERVICE_NAME}.service.d/override.conf
+    systemctl reload-or-restart avahi-daemon || true
+
+    WOLSCA_CONFIG="${CONFIG_DIR}/WolsCAPrintService.json" \
+        "${INSTALL_DIR}/venv/bin/python" \
+        "${INSTALL_DIR}/main.py" --install-printer
+else
+    echo "    [Native Mode] Configuring mDNS (Avahi) and setting port capabilities..."
+    echo -e "[Service]\nAmbientCapabilities=CAP_NET_BIND_SERVICE" > /etc/systemd/system/${SERVICE_NAME}.service.d/override.conf
+
+    cat <<EOF > /etc/avahi/services/wolsca-ipp.service
 <?xml version="1.0" standalone='no'?><!--*-nxml-*-->
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
@@ -124,7 +157,8 @@ cat <<EOF > /etc/avahi/services/wolsca-ipp.service
   </service>
 </service-group>
 EOF
-systemctl reload-or-restart avahi-daemon || true
+    systemctl reload-or-restart avahi-daemon || true
+fi
 
 echo "==> 7/7 Registering the systemd unit"
 install -o root -g root -m 0644 \
@@ -157,7 +191,8 @@ echo "  Status:  systemctl status ${SERVICE_NAME}"
 echo "  Logs:    journalctl -u ${SERVICE_NAME} -f"
 echo "  Config:  ${CONFIG_DIR}/WolsCAPrintService.json"
 echo "  Web app: http://$(hostname).local:${WEB_PORT}/"
-echo "  QR code: http://$(hostname).local:${WEB_PORT}/qr"
-echo "  Native IPP Endpoint: ipp://$(hostname).local:631/printers/WolsCA_Booklet"
-echo
-echo "The native Zero-Trust Python IPP server is now active on port 631."
+if [[ "${WITH_CUPS}" == "yes" ]]; then
+    echo "  Architecture: Hybrid (CUPS intake, Python processing)"
+else
+    echo "  Architecture: Native Zero-Trust IPP (Python standalone)"
+fi

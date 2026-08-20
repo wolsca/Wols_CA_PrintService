@@ -92,6 +92,8 @@ def configure_cups_pdf(drop_dir, conf_path="/etc/cups/cups-pdf.conf", template=N
     overrides = {
         "Out": drop_dir,
         "AnonDirName": drop_dir,
+        # A plain Out path (no ${USER}) keeps every job in one watched folder.
+        "AnonUser": "nobody",
         "Grp": "lp",
         "UserUMask": "0000",
         "Truncate": "64",
@@ -181,6 +183,116 @@ def create_intake_queue(queue_entry, share):
     run_root_command(["cupsenable", queue_name], f"Enabling queue '{queue_name}'")
     run_root_command(["cupsaccept", queue_name], f"Accepting jobs on '{queue_name}'")
 
+CUPSD_CONF = "/etc/cups/cupsd.conf"
+
+def patch_cupsd_conf(conf_path=CUPSD_CONF):
+    """Fallback for 'cupsctl: Not Implemented': write the sharing settings directly."""
+    if not os.path.exists(conf_path):
+        print(f"[Warning] {conf_path} not found; cannot enable sharing manually.")
+        return False
+
+    directives = {
+        "Browsing": "On",
+        "BrowseLocalProtocols": "dnssd",
+        "DefaultShared": "Yes",
+        "Listen": None  # handled separately
+    }
+
+    try:
+        with open(conf_path, "r") as f:
+            lines = f.readlines()
+
+        result = []
+        depth = 0
+        in_root_location = False
+        root_location_has_allow = False
+        listens = []
+
+        for line in lines:
+            stripped = line.strip()
+            lowered = stripped.lower()
+            key = stripped.split(" ")[0] if stripped else ""
+
+            if lowered.startswith("<location /"):
+                depth += 1
+                in_root_location = lowered in ("<location />", "<location>")
+            elif lowered.startswith("<location"):
+                depth += 1
+            elif lowered.startswith("</location"):
+                if in_root_location and not root_location_has_allow:
+                    result.append("  Allow @LOCAL\n")
+                depth -= 1
+                in_root_location = False
+                root_location_has_allow = False
+            elif in_root_location and lowered.startswith("allow "):
+                root_location_has_allow = True
+
+            if depth == 0 and key in directives and not stripped.startswith("#"):
+                if key == "Listen":
+                    listens.append(stripped)
+                continue
+
+            result.append(line)
+
+        keep_listen = [l for l in listens if "/var/run/cups/cups.sock" in l or "/run/cups/cups.sock" in l]
+        block = ["\n### Wols CA Print Service ###\n"]
+        block += [l + "\n" for l in keep_listen] or ["Listen /run/cups/cups.sock\n"]
+        block += ["Listen *:631\n", "Browsing On\n", "BrowseLocalProtocols dnssd\n", "DefaultShared Yes\n"]
+        result += block
+
+        with open(conf_path, "w") as f:
+            f.writelines(result)
+        print(f"[Admin] {conf_path} updated: sharing, DNS-SD browsing and port 631 enabled.")
+        return True
+    except Exception as e:
+        print(f"[Warning] Could not update {conf_path}: {e}")
+        return False
+
+def enable_network_sharing():
+    """CUPS 2.4 answers 'Not Implemented' to cupsctl on some builds; fall back to the config file."""
+    if run_root_command(["cupsctl", "--share-printers", "--remote-any"], "Enabling network sharing"):
+        return
+    print("[Admin] cupsctl refused the request; patching cupsd.conf instead.")
+    patch_cupsd_conf()
+
+def physical_queue_name(c):
+    return str(c.get("hardware", {}).get("cups_queue_name") or "WolsCA_Output").strip()
+
+def ensure_physical_queue():
+    """Creates the real output queue so jobs no longer go to a raw 9100 socket."""
+    c = config.get_config()
+    uri = str(c.get("hardware", {}).get("printer_uri", "")).strip()
+    if not uri:
+        print("[Admin] No hardware.printer_uri configured; skipping the output queue.")
+        return None
+
+    queue_name = physical_queue_name(c)
+    ok = run_root_command(["lpadmin", "-p", queue_name, "-v", uri, "-m", "everywhere", "-E",
+                           "-o", "printer-is-shared=false",
+                           "-D", "Wols CA physical output printer",
+                           "-L", "Wols CA Print Service"],
+                          f"Creating output queue '{queue_name}' for {uri}")
+    if not ok:
+        print("[Warning] Could not create the output queue; the raw dispatch stays in place.")
+        return None
+
+    run_root_command(["cupsenable", queue_name], f"Enabling queue '{queue_name}'")
+    run_root_command(["cupsaccept", queue_name], f"Accepting jobs on '{queue_name}'")
+
+    targets = c.get("printers", {}).get("targets", [])
+    default_id = c.get("printers", {}).get("default")
+    changed = False
+    for target in targets:
+        if len(targets) == 1 or target.get("id") == default_id:
+            if target.get("dispatch") != "cups" or target.get("cups_queue") != queue_name:
+                target["dispatch"] = "cups"
+                target["cups_queue"] = queue_name
+                changed = True
+    if changed:
+        config.save_config()
+        print(f"[Admin] Printer target now dispatches through CUPS queue '{queue_name}'.")
+    return queue_name
+
 def advertise_web_app_over_mdns():
     if not shutil.which("avahi-daemon"):
         return
@@ -222,7 +334,7 @@ def perform_cups_printer_install():
     drop_dir = config.DROP_DIR
 
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    print("[Admin] 1/5: Installing CUPS, cups-pdf and Avahi (Debian/Ubuntu)...")
+    print("[Admin] 1/6: Installing CUPS, cups-pdf and Avahi (Debian/Ubuntu)...")
     try:
         subprocess.run(["apt-get", "update"], check=True, env=env)
         subprocess.run(["apt-get", "install", "-y", "cups", "printer-driver-cups-pdf",
@@ -232,29 +344,32 @@ def perform_cups_printer_install():
         print(f"[Error] Package installation failed: {e}")
         sys.exit(1)
 
-    print("[Admin] 2/5: Configuring cups-pdf output directory...")
+    print("[Admin] 2/6: Configuring cups-pdf output directory...")
     os.makedirs(drop_dir, exist_ok=True)
     os.chmod(drop_dir, 0o2775)
     configure_cups_pdf(drop_dir)
 
     queues = intake_queues()
     if queues:
-        print("[Admin] 3/5: Creating one visible queue per print mode...")
+        print("[Admin] 3/6: Creating one visible queue per print mode...")
         for queue_entry in queues:
             create_intake_queue(queue_entry, share)
     else:
-        print("[Admin] 3/5: Creating the single intake queue...")
+        print("[Admin] 3/6: Creating the single intake queue...")
         create_intake_queue({"id": "booklet", "cups_queue": queue,
                              "description": "Wols CA Booklet Intake",
                              "print_mode": "Booklet", "directory": drop_dir}, share)
 
+    print("[Admin] 4/6: Creating the physical output queue...")
+    output_queue = ensure_physical_queue()
+
     if share:
-        print("[Admin] 4/5: Publishing the queue on the local network...")
-        run_root_command(["cupsctl", "--share-printers", "--remote-any"], "Enabling network sharing")
+        print("[Admin] 5/6: Publishing the queues on the local network...")
+        enable_network_sharing()
         run_root_command(["systemctl", "enable", "--now", "avahi-daemon"], "Enabling Avahi announcements")
         run_root_command(["systemctl", "restart", "cups"], "Restarting CUPS")
 
-    print("[Admin] 5/5: Advertising the web app over mDNS...")
+    print("[Admin] 6/6: Advertising the web app over mDNS...")
     advertise_web_app_over_mdns()
 
     host = socket.gethostname()
@@ -262,6 +377,8 @@ def perform_cups_printer_install():
     print(f"\n[Admin] Deployment complete.")
     for queue_entry in (queues or [{"cups_queue": queue, "print_mode": "Booklet"}]):
         print(f"  Print to : ipp://{host}.local:631/printers/{queue_entry['cups_queue']} ({queue_entry['print_mode']})")
+    if output_queue:
+        print(f"  Output   : CUPS queue '{output_queue}' -> {c['hardware'].get('printer_uri')}")
     print(f"  Web app  : http://{host}.local:{web_port}/")
     sys.exit(0)
 

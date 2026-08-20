@@ -50,6 +50,7 @@ try:
         data = json.load(f)
     names = [q.get("cups_queue", "") for q in data.get("intake", {}).get("queues", [])]
     names.append(data.get("virtual_printer", {}).get("cups_queue_name", ""))
+    names.append(data.get("hardware", {}).get("cups_queue_name", "") or "WolsCA_Output")
     print("\n".join(sorted({n for n in names if n})))
 except Exception:
     print("")
