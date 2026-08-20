@@ -43,6 +43,11 @@ jobs:
           python -c "import json; json.load(open('Wols_CA_PrintService/WolsCAPrintService.json'))"
           python -c "import json; json.load(open('deploy/debian/WolsCAPrintService.linux.json'))"
 
+      - name: Validate the Home Assistant add-on manifests
+        run: |
+          pip install pyyaml
+          python tools/check_addons.py
+
       - name: Check the release tooling
         run: |
           python tools/release.py --dry-run

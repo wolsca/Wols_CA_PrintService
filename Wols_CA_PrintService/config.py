@@ -34,7 +34,11 @@ def load_or_create_config():
             "broker_ip": "192.168.101.240",
             "broker_port": 1883,
             "topic_prefix": "wolsca/printer",
-            "discovery_prefix": "homeassistant"
+            "discovery_prefix": "homeassistant",
+            # Label of this instance. Empty is the classic single installation;
+            # the Home Assistant add-on sets it to 'HA' at start-up, which keeps
+            # its entities apart from a Debian installation on the same broker.
+            "instance_id": ""
         },
         "paths": {
             "drop_directory": r"C:\ProgramData\WolsCA\PrintFileDrop" if IS_WINDOWS else "/var/spool/wolsca/PrintFileDrop",
@@ -142,12 +146,12 @@ def load_or_create_config():
             with open(CONFIG_PATH, 'r') as f:
                 config_data = json.load(f)
                 # Ensure all main sections exist
-                for section in ("settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake", "update"):
+                for section in ("mqtt", "settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake", "update"):
                     if section not in config_data:
                         config_data[section] = default_config[section]
 
                 # Fill in missing sub-keys to keep backward compatibility
-                for section in ("hardware", "web", "notify", "history", "printers", "intake", "update"):
+                for section in ("mqtt", "hardware", "web", "notify", "history", "printers", "intake", "update"):
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
         except Exception as e:

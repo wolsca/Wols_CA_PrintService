@@ -8,6 +8,24 @@ Unreleased changes are collected in `changesFixes.md`; `tools/release.py` moves 
 `RELEASE_NOTES.md` and this file when a release is cut, and empties that file again.
 
 ### Added
+- Home Assistant add-on repository: `repository.json` plus two add-ons that both run the container
+  image published to GHCR - `wolsca_print_service/` (version follows the published releases, so
+  the Supervisor offers an update only when a release is cut) and `wolsca_print_service_test/`
+  (version follows every commit build). `build_and_release.ps1` keeps both `version:` entries in
+  step with the tags it pushes, and `tools/check_addons.py` validates the repository (manifest
+  keys, options/schema in step, unique instance labels) in CI and in the pipeline.
+  - `deploy/docker/entrypoint.sh` detects `/data/options.json`, keeps the configuration in
+    `/data/WolsCAPrintService.json` and writes the add-on options into it, so the configuration
+    and the way it is used are identical to a Debian installation; empty options keep the existing
+    value and the Mosquitto broker details are read from the Supervisor `mqtt` service.
+  - Deliberately no ingress and no sidebar panel: the web app keeps its own port (`web_port`), and
+    the add-on runs with `host_network: true` so Windows and Android still find the printers over
+    mDNS/DNS-SD.
+- New `mqtt.instance_id`: an installation label. Empty (the default) keeps every existing entity
+  id exactly as it is; when it is set, every `unique_id`, the discovery node and the Home Assistant
+  device become their own and the entity names carry the label. The add-on sets it to `HA` at
+  start-up and prefixes the MQTT topic with `HA_` (applied only once), so the add-on and a Debian
+  installation can run side by side on one broker and appear as two devices.
 - Release notes workflow: `changesFixes.md` in the repository root collects every change and fix
   while working, and `tools/release.py` cuts the release from it - it computes the new `x.y`,
   prepends `## x.y.<build> - <date>` plus the collected notes to `RELEASE_NOTES.md` (only ever

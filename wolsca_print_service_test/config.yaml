@@ -1,0 +1,71 @@
+---
+# Wols CA Print Service - Home Assistant add-on (test channel).
+#
+# Identical to the release add-on, but it follows the commit builds: every run of
+# build_and_release.ps1 publishes a 'build-<version>' image tag and bumps the
+# version below. Install this one only to try something out; the release add-on
+# is the one that should stay installed.
+#
+# Its slug differs, so both can be installed side by side. Give it its own MQTT
+# topic prefix and web port, otherwise the two instances fight over the same
+# Home Assistant entities and the same TCP port.
+name: Wols CA Print Service (test)
+slug: wolsca_print_service_test
+description: >-
+  Commit build of the Wols CA Print Service - for testing only, use the release
+  add-on for normal operation.
+version: "build-1.4.384"
+url: https://github.com/wolsca/Wols_CA_PrintService
+image: ghcr.io/wolsca/wols_ca_printservice
+arch:
+  - amd64
+init: false
+host_network: true
+host_dbus: true
+privileged:
+  - SYS_ADMIN
+webui: "http://[HOST]:8081/"
+map:
+  - share:rw
+services:
+  - mqtt:want
+startup: services
+boot: manual
+advanced: true
+stage: experimental
+options:
+  # Its own label, otherwise the test instance would take over the entities of
+  # the release add-on.
+  instance_id: HAtest
+  mqtt_broker: ""
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+  mqtt_topic_prefix: wols_ca/printer_test
+  mqtt_discovery_prefix: homeassistant
+  printer_uri: ipps://192.168.101.251:443/ipp/print
+  print_mode: Duplex
+  flip_timeout_seconds: 1800
+  web_port: 8081
+  web_title: Wols CA Print Service (test)
+  web_language: en
+  admin_token: ""
+  auto_update: false
+  allow_test_builds: true
+schema:
+  instance_id: str
+  mqtt_broker: str?
+  mqtt_port: port
+  mqtt_user: str?
+  mqtt_password: password?
+  mqtt_topic_prefix: str
+  mqtt_discovery_prefix: str
+  printer_uri: str
+  print_mode: list(Booklet|Duplex|Simplex)
+  flip_timeout_seconds: int(30,86400)
+  web_port: port
+  web_title: str
+  web_language: str
+  admin_token: password?
+  auto_update: bool
+  allow_test_builds: bool

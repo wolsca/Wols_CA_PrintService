@@ -110,6 +110,7 @@ sudo systemctl restart wolsca-print-service
 | :--- | :--- | :--- |
 | **mqtt** | `broker_ip` | IP address of your MQTT broker. |
 | | `topic_prefix` | Base topic for MQTT messages (default: `wolsca/printer`). |
+| | `instance_id` | Label of this installation, empty by default. Non-empty makes every entity, device and discovery node its own, so several installations can share one broker. The Home Assistant add-on sets it to `HA` itself and prefixes the topic with `HA_`. |
 | **paths** | `drop_directory` | Folder watched for new PDF files. |
 | **intake** | `enabled` | Enable triple-queue intake (default: `true`). |
 | | `queues` | Array of intake queues: `[{id, cups_queue, description, print_mode, directory}]`. |
@@ -407,6 +408,52 @@ published as a Home Assistant add-on.
 ```
 
 See `deploy/docker/README.md` for the details.
+
+---
+
+## Home Assistant add-on
+
+The repository is also an add-on repository, so the very same container can be
+installed from the Home Assistant Add-on Store. In Home Assistant:
+**Settings -> Add-ons -> Add-on Store -> ⋮ -> Repositories**, add
+`https://github.com/wolsca/Wols_CA_PrintService`, then install:
+
+| Add-on | Directory | Follows | Instance label |
+|---|---|---|---|
+| Wols CA Print Service | `wolsca_print_service/` | published releases (`:x.y.build` image tag) | `HA` |
+| Wols CA Print Service (test) | `wolsca_print_service_test/` | every commit build (`:build-x.y.build`) | `HAtest` |
+
+Both manifests point at `ghcr.io/wolsca/wols_ca_printservice`;
+`build_and_release.ps1` keeps the `version:` in step with the tag it pushes - the
+test add-on on every run, the release add-on only with `-Release`. That is what
+makes Home Assistant offer an update on releases only. `tools/check_addons.py`
+validates the manifests (also in CI and in the pipeline).
+
+What stays the same and what does not:
+
+- **Configuration**: identical. The add-on options are written into the same
+  `WolsCAPrintService.json` (at `/data/` inside the add-on, which is the
+  persistent location); everything the options do not cover stays in that file
+  and remains editable through the administrator card.
+- **Interface in Home Assistant**: identical, everything through MQTT discovery.
+  Deliberately no ingress and no sidebar panel - the web app keeps its own port
+  (`web_port`), so it is reached at `http://<ha-host>:8080/`.
+- **Network**: the add-on runs with `host_network: true`, because Windows and
+  Android only find the printers over mDNS/DNS-SD and CUPS has to answer on 631.
+  Port 631 on the host must therefore be free.
+
+### Two instances on one broker
+
+`mqtt.instance_id` labels an installation. Empty - the default, and what every
+existing Debian installation has - means everything stays exactly as it is. The
+add-on sets it at start-up (dynamically, in the container entrypoint), and that
+has two effects:
+
+- the MQTT topic prefix gets the marker in front of it: `wols_ca/printer`
+  becomes `HA_wols_ca/printer`, applied idempotently;
+- every `unique_id` gets the suffix (`_ha`), and the discovery node and the
+  device become their own, so the add-on and the Debian service appear as two
+  separate devices in Home Assistant instead of overwriting each other.
 
 ---
 

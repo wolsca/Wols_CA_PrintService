@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 from datetime import datetime
 import paho.mqtt.client as mqtt
@@ -67,11 +68,35 @@ c = config.get_config()
 PREFIX = c["mqtt"].get("topic_prefix", "wols_ca/printer_servic")
 HA_PREFIX = c["mqtt"].get("discovery_prefix", "homeassistant")
 
+# Instance identity. Empty means the classic single installation, so its entity
+# ids stay exactly as they were. The Home Assistant add-on sets it to 'HA'
+# (dynamically, in the container entrypoint), which gives every entity its own
+# unique_id, its own discovery node and its own device - that is what makes an
+# add-on and a Debian installation able to run side by side on one broker.
+INSTANCE_ID = str(c["mqtt"].get("instance_id", "") or "").strip()
+INSTANCE_SLUG = re.sub(r"[^a-z0-9]+", "_", INSTANCE_ID.lower()).strip("_")
+SUFFIX = f"_{INSTANCE_SLUG}" if INSTANCE_SLUG else ""
+NODE_ID = f"wolsca_print{SUFFIX}"
+ADMIN_NODE_ID = f"wolsca_admin{SUFFIX}"
+DEVICE_ID = f"wolsca_print_service_01{SUFFIX}"
+NAME_SUFFIX = f" ({INSTANCE_ID})" if INSTANCE_ID else ""
+
+
+def uid(name):
+    """A unique_id that is unique per instance as well."""
+    return f"{name}{SUFFIX}"
+
+
+def entity_name(name):
+    """Entity name carrying the instance label, so both are recognisable in HA."""
+    return f"{name}{NAME_SUFFIX}"
+
+
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
 DEVICE_INFO = {
-    "identifiers": ["wolsca_print_service_01"],
-    "name": "Wols CA Print Service",
+    "identifiers": [DEVICE_ID],
+    "name": f"Wols CA Print Service{NAME_SUFFIX}",
     "manufacturer": "Wols CA",
     "model": "Double Sided Spooler",
     "sw_version": SERVICE_VERSION
@@ -82,45 +107,45 @@ def publish_ha_discovery():
     print("[MQTT] Publishing Home Assistant Auto-Discovery configuration...")
 
     config_status = {
-        "name": "Print Service Status",
+        "name": entity_name("Print Service Status"),
         "state_topic": f"{PREFIX}/status",
         "value_template": "{{ value_json.state }}",
         "json_attributes_topic": f"{PREFIX}/status",
         "icon": "mdi:printer-3d",
-        "unique_id": "wolsca_print_status",
+        "unique_id": uid("wolsca_print_status"),
         "device": DEVICE_INFO
     }
-    mqtt_client.publish(f"{HA_PREFIX}/sensor/wolsca_print/status/config", json.dumps(config_status), retain=True)
+    mqtt_client.publish(f"{HA_PREFIX}/sensor/{NODE_ID}/status/config", json.dumps(config_status), retain=True)
 
     config_error = {
-        "name": "Print Service Last Error",
+        "name": entity_name("Print Service Last Error"),
         "state_topic": f"{PREFIX}/status",
         "value_template": "{% if value_json.state == 'ERROR' %}{{ value_json.detail }}{% else %}No errors{% endif %}",
         "icon": "mdi:alert-circle-outline",
-        "unique_id": "wolsca_print_error",
+        "unique_id": uid("wolsca_print_error"),
         "device": DEVICE_INFO
     }
-    mqtt_client.publish(f"{HA_PREFIX}/sensor/wolsca_print/error/config", json.dumps(config_error), retain=True)
+    mqtt_client.publish(f"{HA_PREFIX}/sensor/{NODE_ID}/error/config", json.dumps(config_error), retain=True)
 
     config_button = {
-        "name": "Resume Print (Flip)",
+        "name": entity_name("Resume Print (Flip)"),
         "command_topic": f"{PREFIX}/command",
         "payload_press": "RESUME",
         "icon": "mdi:page-next",
-        "unique_id": "wolsca_print_resume",
+        "unique_id": uid("wolsca_print_resume"),
         "device": DEVICE_INFO
     }
-    mqtt_client.publish(f"{HA_PREFIX}/button/wolsca_print/resume/config", json.dumps(config_button), retain=True)
+    mqtt_client.publish(f"{HA_PREFIX}/button/{NODE_ID}/resume/config", json.dumps(config_button), retain=True)
 
     config_cancel = {
-        "name": "Cancel Print Job",
+        "name": entity_name("Cancel Print Job"),
         "command_topic": f"{PREFIX}/command",
         "payload_press": "CANCEL",
         "icon": "mdi:cancel",
-        "unique_id": "wolsca_print_cancel",
+        "unique_id": uid("wolsca_print_cancel"),
         "device": DEVICE_INFO
     }
-    mqtt_client.publish(f"{HA_PREFIX}/button/wolsca_print/cancel/config", json.dumps(config_cancel), retain=True)
+    mqtt_client.publish(f"{HA_PREFIX}/button/{NODE_ID}/cancel/config", json.dumps(config_cancel), retain=True)
 
     # Imported late: these modules import this one.
     try:

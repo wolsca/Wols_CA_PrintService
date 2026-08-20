@@ -518,64 +518,64 @@ def publish_ha_discovery():
     device = mqtt_service.DEVICE_INFO
 
     sensor = {
-        "name": "Print Service Self-Test",
+        "name": mqtt_service.entity_name("Print Service Self-Test"),
         "state_topic": topic("report"),
         "value_template": "{{ value_json.result }}",
         "json_attributes_topic": topic("report"),
         "icon": "mdi:clipboard-check-outline",
-        "unique_id": "wolsca_print_selftest",
+        "unique_id": mqtt_service.uid("wolsca_print_selftest"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/sensor/wolsca_print/selftest/config",
+        f"{mqtt_service.HA_PREFIX}/sensor/{mqtt_service.NODE_ID}/selftest/config",
         json.dumps(sensor), retain=True)
 
     summary = {
-        "name": "Print Service Self-Test Summary",
+        "name": mqtt_service.entity_name("Print Service Self-Test Summary"),
         "state_topic": topic("report"),
         "value_template": "{{ value_json.summary }}",
         "icon": "mdi:format-list-checks",
-        "unique_id": "wolsca_print_selftest_summary",
+        "unique_id": mqtt_service.uid("wolsca_print_selftest_summary"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/sensor/wolsca_print/selftest_summary/config",
+        f"{mqtt_service.HA_PREFIX}/sensor/{mqtt_service.NODE_ID}/selftest_summary/config",
         json.dumps(summary), retain=True)
 
     failures = {
-        "name": "Print Service Self-Test Failures",
+        "name": mqtt_service.entity_name("Print Service Self-Test Failures"),
         "state_topic": topic("report"),
         "value_template": "{{ value_json.failed }}",
         "json_attributes_topic": topic("report"),
         "json_attributes_template": "{{ {'failed_steps': value_json.failed_steps} | tojson }}",
         "icon": "mdi:alert-decagram-outline",
-        "unique_id": "wolsca_print_selftest_failures",
+        "unique_id": mqtt_service.uid("wolsca_print_selftest_failures"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/sensor/wolsca_print/selftest_failures/config",
+        f"{mqtt_service.HA_PREFIX}/sensor/{mqtt_service.NODE_ID}/selftest_failures/config",
         json.dumps(failures), retain=True)
 
     button = {
-        "name": "Run Print Service Self-Test",
+        "name": mqtt_service.entity_name("Run Print Service Self-Test"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "SELFTEST",
         "icon": "mdi:play-box-outline",
-        "unique_id": "wolsca_print_selftest_run",
+        "unique_id": mqtt_service.uid("wolsca_print_selftest_run"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/selftest/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/selftest/config",
         json.dumps(button), retain=True)
 
     chain_button = {
-        "name": "Run Print Service Chain Test",
+        "name": mqtt_service.entity_name("Run Print Service Chain Test"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "SELFTEST_CHAIN",
         "icon": "mdi:printer-check",
-        "unique_id": "wolsca_print_selftest_chain",
+        "unique_id": mqtt_service.uid("wolsca_print_selftest_chain"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/selftest_chain/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/selftest_chain/config",
         json.dumps(chain_button), retain=True)

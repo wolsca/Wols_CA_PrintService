@@ -259,12 +259,12 @@ def device_info():
     """A device of its own, so the admin entities can be hidden from users."""
     import mqtt_service
     return {
-        "identifiers": ["wolsca_print_service_admin"],
-        "name": "Wols CA Print Service Admin",
+        "identifiers": [mqtt_service.uid("wolsca_print_service_admin")],
+        "name": f"Wols CA Print Service Admin{mqtt_service.NAME_SUFFIX}",
         "manufacturer": "Wols CA",
         "model": "Configuration",
         "sw_version": mqtt_service.SERVICE_VERSION,
-        "via_device": "wolsca_print_service_01"
+        "via_device": mqtt_service.DEVICE_ID
     }
 
 
@@ -316,11 +316,11 @@ def publish_ha_discovery():
     for field in FIELDS:
         eid = entity_id(field["key"])
         common = {
-            "name": field["label"],
+            "name": mqtt_service.entity_name(field["label"]),
             "state_topic": topic(f"value/{eid}"),
             "command_topic": topic(f"set/{eid}"),
             "entity_category": "config",
-            "unique_id": f"wolsca_admin_{eid}",
+            "unique_id": mqtt_service.uid(f"wolsca_admin_{eid}"),
             "device": device
         }
         if field["type"] == "bool":
@@ -339,49 +339,49 @@ def publish_ha_discovery():
             common.update({"max": 255, "icon": "mdi:form-textbox"})
 
         mqtt_service.mqtt_client.publish(
-            f"{mqtt_service.HA_PREFIX}/{platform}/wolsca_admin/{eid}/config",
+            f"{mqtt_service.HA_PREFIX}/{platform}/{mqtt_service.ADMIN_NODE_ID}/{eid}/config",
             json.dumps(common), retain=True)
         mqtt_service.mqtt_client.subscribe(topic(f"set/{eid}"))
 
     restart_sensor = {
-        "name": "Restart Required",
+        "name": mqtt_service.entity_name("Restart Required"),
         "state_topic": topic("restart_required"),
         "payload_on": "ON",
         "payload_off": "OFF",
         "json_attributes_topic": topic("state"),
         "icon": "mdi:restart-alert",
         "entity_category": "diagnostic",
-        "unique_id": "wolsca_admin_restart_required",
+        "unique_id": mqtt_service.uid("wolsca_admin_restart_required"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/binary_sensor/wolsca_admin/restart_required/config",
+        f"{mqtt_service.HA_PREFIX}/binary_sensor/{mqtt_service.ADMIN_NODE_ID}/restart_required/config",
         json.dumps(restart_sensor), retain=True)
 
     restart_button = {
-        "name": "Restart Print Service",
+        "name": mqtt_service.entity_name("Restart Print Service"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "RESTART_SERVICE",
         "icon": "mdi:restart",
         "entity_category": "config",
-        "unique_id": "wolsca_admin_restart",
+        "unique_id": mqtt_service.uid("wolsca_admin_restart"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_admin/restart/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.ADMIN_NODE_ID}/restart/config",
         json.dumps(restart_button), retain=True)
 
     discard_button = {
-        "name": "Discard Configuration Changes",
+        "name": mqtt_service.entity_name("Discard Configuration Changes"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "RELOAD_CONFIG",
         "icon": "mdi:undo-variant",
         "entity_category": "config",
-        "unique_id": "wolsca_admin_reload",
+        "unique_id": mqtt_service.uid("wolsca_admin_reload"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_admin/reload/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.ADMIN_NODE_ID}/reload/config",
         json.dumps(discard_button), retain=True)
 
     publish_state()

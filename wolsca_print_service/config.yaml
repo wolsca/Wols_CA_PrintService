@@ -1,0 +1,77 @@
+---
+# Wols CA Print Service - Home Assistant add-on (release channel).
+#
+# The image is the very same Debian container that is built and published by
+# build_and_release.ps1, so the add-on runs the same code, the same CUPS intake
+# queues and the same /etc/wolsca/WolsCAPrintService.json layout as the service
+# on a Debian or Ubuntu host. Nothing about the configuration differs.
+#
+# 'version' is synchronised with the published release tag by
+# build_and_release.ps1 -Release, so the Supervisor only ever offers a real
+# release - commit builds live in the separate '..._test' add-on.
+name: Wols CA Print Service
+slug: wolsca_print_service
+description: >-
+  Booklet and double-sided print service with CUPS intake queues, web app and
+  Home Assistant (MQTT) integration.
+version: "1.4.381"
+url: https://github.com/wolsca/Wols_CA_PrintService
+image: ghcr.io/wolsca/wols_ca_printservice
+arch:
+  - amd64
+init: false
+# The printers must be discoverable over mDNS/DNS-SD by Windows and Android and
+# CUPS has to answer on 631, so the add-on shares the host network. Port mapping
+# would break discovery, therefore 'ports' is deliberately absent.
+host_network: true
+host_dbus: true
+privileged:
+  - SYS_ADMIN
+# The web app keeps its own port - deliberately no ingress and no sidebar panel:
+# the interface in Home Assistant stays exactly what it is today, the MQTT
+# entities.
+webui: "http://[HOST]:8080/"
+map:
+  - share:rw
+services:
+  - mqtt:want
+startup: services
+boot: auto
+options:
+  # Instance label. The service prefixes the MQTT topic with '<instance_id>_'
+  # and makes every entity, device and discovery node unique with it, so this
+  # add-on and a Debian installation can share one broker.
+  instance_id: HA
+  mqtt_broker: ""
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+  mqtt_topic_prefix: wols_ca/printer
+  mqtt_discovery_prefix: homeassistant
+  printer_uri: ipps://192.168.101.251:443/ipp/print
+  print_mode: Duplex
+  flip_timeout_seconds: 1800
+  web_port: 8080
+  web_title: Wols CA Print Service
+  web_language: en
+  admin_token: ""
+  auto_update: false
+  allow_test_builds: false
+schema:
+  instance_id: str
+  mqtt_broker: str?
+  mqtt_port: port
+  mqtt_user: str?
+  mqtt_password: password?
+  mqtt_topic_prefix: str
+  mqtt_discovery_prefix: str
+  printer_uri: str
+  print_mode: list(Booklet|Duplex|Simplex)
+  flip_timeout_seconds: int(30,86400)
+  web_port: port
+  web_title: str
+  # Only 'en' is translated today; web_strings.json decides what is available.
+  web_language: str
+  admin_token: password?
+  auto_update: bool
+  allow_test_builds: bool

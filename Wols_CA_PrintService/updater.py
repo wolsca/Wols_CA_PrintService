@@ -412,99 +412,99 @@ def publish_ha_discovery():
     state["auto_update"] = bool(update_config().get("auto_update"))
 
     entity = {
-        "name": "Print Service Update",
+        "name": mqtt_service.entity_name("Print Service Update"),
         "state_topic": topic("state"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_install": "INSTALL_UPDATE",
         "device_class": "firmware",
         "icon": "mdi:package-up",
-        "unique_id": "wolsca_print_update",
+        "unique_id": mqtt_service.uid("wolsca_print_update"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/update/wolsca_print/update/config",
+        f"{mqtt_service.HA_PREFIX}/update/{mqtt_service.NODE_ID}/update/config",
         json.dumps(entity), retain=True)
 
     sensor = {
-        "name": "Print Service Version",
+        "name": mqtt_service.entity_name("Print Service Version"),
         "state_topic": topic("state"),
         "value_template": "{{ value_json.installed_version }}",
         "json_attributes_topic": topic("state"),
         "icon": "mdi:tag-outline",
         "entity_category": "diagnostic",
-        "unique_id": "wolsca_print_version",
+        "unique_id": mqtt_service.uid("wolsca_print_version"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/sensor/wolsca_print/version/config",
+        f"{mqtt_service.HA_PREFIX}/sensor/{mqtt_service.NODE_ID}/version/config",
         json.dumps(sensor), retain=True)
 
     check_button = {
-        "name": "Check for Print Service Update",
+        "name": mqtt_service.entity_name("Check for Print Service Update"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "CHECK_UPDATE",
         "icon": "mdi:cloud-search-outline",
-        "unique_id": "wolsca_print_update_check",
+        "unique_id": mqtt_service.uid("wolsca_print_update_check"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/update_check/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/update_check/config",
         json.dumps(check_button), retain=True)
 
     install_button = {
-        "name": "Install Print Service Update",
+        "name": mqtt_service.entity_name("Install Print Service Update"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "INSTALL_UPDATE",
         "icon": "mdi:download-box-outline",
-        "unique_id": "wolsca_print_update_install",
+        "unique_id": mqtt_service.uid("wolsca_print_update_install"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/update_install/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/update_install/config",
         json.dumps(install_button), retain=True)
 
     test_check_button = {
-        "name": "Check for Print Service Test Build",
+        "name": mqtt_service.entity_name("Check for Print Service Test Build"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "CHECK_TEST_BUILD",
         "icon": "mdi:flask-outline",
         "entity_category": "config",
-        "unique_id": "wolsca_print_testbuild_check",
+        "unique_id": mqtt_service.uid("wolsca_print_testbuild_check"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/testbuild_check/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/testbuild_check/config",
         json.dumps(test_check_button), retain=True)
 
     test_install_button = {
-        "name": "Install Print Service Test Build",
+        "name": mqtt_service.entity_name("Install Print Service Test Build"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_press": "INSTALL_TEST_BUILD",
         "icon": "mdi:flask",
         "entity_category": "config",
-        "unique_id": "wolsca_print_testbuild_install",
+        "unique_id": mqtt_service.uid("wolsca_print_testbuild_install"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/button/wolsca_print/testbuild_install/config",
+        f"{mqtt_service.HA_PREFIX}/button/{mqtt_service.NODE_ID}/testbuild_install/config",
         json.dumps(test_install_button), retain=True)
 
     test_sensor = {
-        "name": "Print Service Test Build",
+        "name": mqtt_service.entity_name("Print Service Test Build"),
         "state_topic": topic("state"),
         "value_template": "{{ value_json.test_version | default('-') }}",
         "json_attributes_topic": topic("state"),
         "icon": "mdi:flask-outline",
         "entity_category": "diagnostic",
-        "unique_id": "wolsca_print_testbuild",
+        "unique_id": mqtt_service.uid("wolsca_print_testbuild"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/sensor/wolsca_print/testbuild/config",
+        f"{mqtt_service.HA_PREFIX}/sensor/{mqtt_service.NODE_ID}/testbuild/config",
         json.dumps(test_sensor), retain=True)
 
     auto_switch = {
-        "name": "Print Service Automatic Update",
+        "name": mqtt_service.entity_name("Print Service Automatic Update"),
         "state_topic": topic("auto"),
         "command_topic": f"{mqtt_service.PREFIX}/command",
         "payload_on": "AUTOUPDATE_ON",
@@ -512,11 +512,11 @@ def publish_ha_discovery():
         "state_on": "ON",
         "state_off": "OFF",
         "icon": "mdi:update",
-        "unique_id": "wolsca_print_update_auto",
+        "unique_id": mqtt_service.uid("wolsca_print_update_auto"),
         "device": device
     }
     mqtt_service.mqtt_client.publish(
-        f"{mqtt_service.HA_PREFIX}/switch/wolsca_print/update_auto/config",
+        f"{mqtt_service.HA_PREFIX}/switch/{mqtt_service.NODE_ID}/update_auto/config",
         json.dumps(auto_switch), retain=True)
 
     publish_state()

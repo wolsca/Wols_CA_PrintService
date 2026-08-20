@@ -3,7 +3,8 @@
         "broker_ip": "192.168.101.240",
         "broker_port": 1883,
         "topic_prefix": "wolsca/printer",
-        "discovery_prefix": "homeassistant"
+        "discovery_prefix": "homeassistant",
+        "instance_id": ""
     },
     "paths": {
         "drop_directory": "/var/spool/wolsca/PrintFileDrop",

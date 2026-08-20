@@ -118,9 +118,15 @@ $TestPrintDir = Join-Path $RepoRoot "TestPrint"
 # Results live in a subfolder, so a result is never mistaken for a test document.
 $TestResultDir = Join-Path $TestPrintDir "Results"
 $TokenFile    = Join-Path $RepoRoot ".github_token"
+# Home Assistant add-on manifests. The release add-on follows the releases, the
+# test add-on every commit build, so the Supervisor only offers an update when a
+# release is cut.
+$AddonConfig     = Join-Path $RepoRoot "wolsca_print_service\config.yaml"
+$AddonTestConfig = Join-Path $RepoRoot "wolsca_print_service_test\config.yaml"
 
 # Files this script regenerates; their content is captured before the first write.
-$GeneratedFiles = @($VersionFile, $BuildFile, $ReleasedFile, $ChangesFile, $NotesFile, $ChangelogFile)
+$GeneratedFiles = @($VersionFile, $BuildFile, $ReleasedFile, $ChangesFile, $NotesFile, $ChangelogFile,
+                    $AddonConfig, $AddonTestConfig)
 
 $LocalImage = "wolsca-print-service:test"
 $ContainerName = "wolsca-pipeline"
@@ -175,6 +181,33 @@ function Get-GitHubToken {
         }
     }
     return $null
+}
+
+function Write-TextFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
+    )
+    # Set-Content -Encoding utf8 writes a BOM on PowerShell 5.1; YAML must stay
+    # BOM-less or the Supervisor cannot parse the manifest.
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
+}
+
+function Set-AddonVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+    # The add-on version must be exactly the published image tag, otherwise the
+    # Supervisor gets a 404 when it pulls the image.
+    if (-not (Test-Path $Path)) {
+        Write-Warn "Add-on manifest $Path not found; version not synchronised."
+        return
+    }
+    $Text = (Get-Content $Path -Raw) -replace '(?m)^version:\s*".*"', "version: `"$Version`""
+    Write-TextFile -Path $Path -Content $Text
+    Write-Ok "$(Split-Path (Split-Path $Path -Parent) -Leaf)/config.yaml -> version $Version"
 }
 
 function Invoke-Native {
@@ -379,8 +412,13 @@ try {
         Write-Warn "Install them with: $Python -m pip install -r requirements.txt"
     }
 
-    Invoke-Native $Python @("-c", "import json; json.load(open('Wols_CA_PrintService/web_strings.json', encoding='utf-8')); json.load(open('deploy/debian/WolsCAPrintService.linux.json', encoding='utf-8')); print('json ok')") "JSON validation"
+    Invoke-Native $Python @("-c", "import json; json.load(open('Wols_CA_PrintService/web_strings.json', encoding='utf-8')); json.load(open('deploy/debian/WolsCAPrintService.linux.json', encoding='utf-8')); json.load(open('repository.json', encoding='utf-8')); print('json ok')") "JSON validation"
     Write-Ok "The shipped JSON files are valid."
+
+    # The add-on manifests decide whether Home Assistant can install the image at
+    # all, so an incomplete manifest has to fail here, not in HA.
+    Invoke-Native $Python @((Join-Path $RepoRoot "tools\check_addons.py")) "add-on manifest check"
+    Write-Ok "The Home Assistant add-on manifests are consistent."
 } catch {
     Write-Fail $_.Exception.Message
     exit 1
@@ -603,6 +641,16 @@ try {
         }
         $NewVersion = "$(& $Python (Join-Path $RepoRoot 'tools\bump_version.py') --show)".Trim()
         Write-Ok "Version to publish: $NewVersion"
+
+        # Home Assistant add-on manifests: the test add-on tracks every commit
+        # build, the release add-on only a real release. That is what makes the
+        # Supervisor offer an update on releases only.
+        if ($PSCmdlet.ShouldProcess($AddonTestConfig, "synchronise the add-on version")) {
+            Set-AddonVersion -Path $AddonTestConfig -Version "build-$NewVersion"
+        }
+        if ($Release -and $PSCmdlet.ShouldProcess($AddonConfig, "synchronise the add-on version")) {
+            Set-AddonVersion -Path $AddonConfig -Version $NewVersion
+        }
 
         if ([string]::IsNullOrWhiteSpace($CommitMessage) -and -not $NonInteractive) {
             Write-Host ""

@@ -12,7 +12,14 @@ packages, runs the very same `installer.py`, creates the same CUPS queues and
 reads the same `/etc/wolsca/WolsCAPrintService.json`. **Nothing in the
 configuration differs from an installation on Debian or Ubuntu**, which is the
 whole point: what passes here behaves the same on the server, and the same image
-can later be published as a Home Assistant add-on.
+is also what the Home Assistant add-on runs.
+
+The add-on packaging lives in the repository root: `repository.json` plus
+`wolsca_print_service/` (releases) and `wolsca_print_service_test/` (commit
+builds). Inside Home Assistant the entrypoint finds `/data/options.json`, keeps
+the configuration in `/data/WolsCAPrintService.json` and writes the add-on
+options into it - see the add-on `DOCS.md` and the *Home Assistant add-on*
+section of the main `README.md`.
 
 ## Run it
 
