@@ -16,7 +16,7 @@ SERVICE_NAME="wolsca-print-service"
 INSTALL_DIR="/opt/${SERVICE_NAME}"
 CONFIG_DIR="/etc/wolsca"
 SPOOL_DIR="/var/spool/wolsca"
-SERVICE_USER="wolsca"
+SERVICE_USER="root"
 WITH_CUPS="no"
 
 for arg in "$@"; do

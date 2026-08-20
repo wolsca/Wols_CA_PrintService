@@ -63,7 +63,7 @@ CONFIG_PATH = resolve_config_path()
 
 def load_or_create_config():
     global config
-    
+
     default_config = {
         "mqtt": {
             "broker_ip": "192.168.101.240",
@@ -609,7 +609,7 @@ DEVICE_INFO = {
 
 def publish_ha_discovery():
     print("[MQTT] Publishing Home Assistant Auto-Discovery configuration...")
-    
+
     config_status = {
         "name": "Print Service Status",
         "state_topic": f"{PREFIX}/status",
@@ -738,7 +738,7 @@ def on_message(client, userdata, msg):
     global waiting_for_user_action
     payload = msg.payload.decode('utf-8')
     topic = msg.topic
-    
+
     if topic == f"{PREFIX}/command" and payload == "RESUME":
         if waiting_for_user_action:
             print("[System] 'RESUME' command received via MQTT. Continuing workflow...")
@@ -751,7 +751,7 @@ def on_message(client, userdata, msg):
     elif topic == f"{PREFIX}/command" and payload == "REPRINT":
         print("[System] 'REPRINT' command received via MQTT.")
         request_reprint_front()
-            
+
     elif topic == f"{PREFIX}/settings/mode/set":
         print(f"[Settings] Print Mode updated to: {payload}")
         config["settings"]["print_mode"] = payload
@@ -802,7 +802,7 @@ def generate_booklet_pdfs(input_pdf_path):
     try:
         reader = PdfReader(input_pdf_path)
         page_count = len(reader.pages)
-        
+
         a4_width, a4_height = 842.0, 595.0
         a5_width, a5_height = a4_width / 2.0, a4_height
 
@@ -825,7 +825,7 @@ def generate_booklet_pdfs(input_pdf_path):
                 scale = min(a5_width / float(lp_f.mediabox.width), a5_height / float(lp_f.mediabox.height))
                 lp_f.add_transformation(Transformation().scale(scale, scale))
                 front_sheet.merge_page(lp_f)
-                
+
             if right_page_front_idx < page_count:
                 rp_f = reader.pages[right_page_front_idx]
                 scale = min(a5_width / float(rp_f.mediabox.width), a5_height / float(rp_f.mediabox.height))
@@ -840,7 +840,7 @@ def generate_booklet_pdfs(input_pdf_path):
                 scale = min(a5_width / float(lp_b.mediabox.width), a5_height / float(lp_b.mediabox.height))
                 lp_b.add_transformation(Transformation().scale(scale, scale))
                 back_sheet.merge_page(lp_b)
-                
+
             if right_page_back_idx < page_count:
                 rp_b = reader.pages[right_page_back_idx]
                 scale = min(a5_width / float(rp_b.mediabox.width), a5_height / float(rp_b.mediabox.height))
@@ -1744,8 +1744,8 @@ def web_language():
 def render_web_page():
     language = web_language()
     return (WEB_PAGE.replace("__TITLE__", web_title())
-                    .replace("__LANG__", language)
-                    .replace("__STRINGS__", json.dumps(WEB_STRINGS[language])))
+            .replace("__LANG__", language)
+            .replace("__STRINGS__", json.dumps(WEB_STRINGS[language])))
 
 QR_PAGE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1774,8 +1774,8 @@ def render_qr_page():
     except Exception:
         pass
     return (QR_PAGE.replace("__TITLE__", web_title())
-                   .replace("__QR__", markup)
-                   .replace("__URL__", url))
+            .replace("__QR__", markup)
+            .replace("__URL__", url))
 
 def web_title():
     return config.get("web", {}).get("title", "Wols CA Booklet Printer")
@@ -1810,7 +1810,7 @@ def status_snapshot(token):
         "waiting_for_flip": snapshot["waiting_for_flip"],
         "flip_instruction": snapshot["flip_instruction"],
         "flip_seconds_left": int(max(0, snapshot["flip_deadline"] - time.time()))
-                             if snapshot["flip_deadline"] else 0,
+        if snapshot["flip_deadline"] else 0,
         "updated": snapshot["updated"],
         "printers": printer_targets(),
         "default_printer_id": default_printer()["id"],
@@ -2009,11 +2009,11 @@ def check_virtual_printer():
 
     printer_name = config["virtual_printer"]["name"]
     result = subprocess.run(["powershell", "-Command", f"Get-Printer -Name '{printer_name}' -ErrorAction SilentlyContinue"], capture_output=True, text=True)
-    
+
     if not result.stdout.strip():
         print(f"[Zero-Touch] Virtual printer '{printer_name}' not found.")
         print("[Zero-Touch] Requesting Administrator privileges for fully automated deployment...")
-        
+
         script_path = os.path.abspath(__file__)
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" --install-printer', None, 1)
 
@@ -2210,7 +2210,7 @@ def perform_cups_printer_install():
     print("[Admin] 1/5: Installing CUPS, cups-pdf and Avahi (Debian/Ubuntu)...")
     try:
         subprocess.run(["apt-get", "update"], check=True, env=env)
-        subprocess.run(["apt-get", "install", "-y", "cups", "cups-pdf",
+        subprocess.run(["apt-get", "install", "-y", "cups", "printer-driver-cups-pdf",
                         "cups-ipp-utils", "avahi-daemon", "avahi-utils"],
                        check=True, env=env)
     except Exception as e:
@@ -2265,7 +2265,7 @@ def download_installer(url, dest_path):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        
+
         with urllib.request.urlopen(url, context=ctx) as response, open(dest_path, 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
         print("[Network] Download completed successfully.")
@@ -2279,7 +2279,7 @@ def perform_admin_printer_install():
     print("\n===================================================")
     print("  Wols CA Zero-Touch Printer Deployment Started    ")
     print("===================================================\n")
-    
+
     installer_path = config["virtual_printer"]["installer_path"]
     download_url = config["virtual_printer"].get("download_url", "")
     drop_dir = config["paths"]["drop_directory"]
@@ -2290,7 +2290,7 @@ def perform_admin_printer_install():
             print("[Error] No download URL configured in JSON. Aborting.")
             time.sleep(5)
             sys.exit(1)
-            
+
         success = download_installer(download_url, installer_path)
         if not success:
             print("[Error] Could not fetch the package. Deployment aborted.")
@@ -2308,7 +2308,7 @@ def perform_admin_printer_install():
     try:
         key_path = r"Software\pdfforge\PDFCreator\Settings\ConversionProfiles\0"
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
-        
+
         winreg.SetValueEx(key, "Enabled", 0, winreg.REG_SZ, "True")
         winreg.SetValueEx(key, "AutoSaveEnabled", 0, winreg.REG_SZ, "True")
         winreg.SetValueEx(key, "AutoSaveDirectory", 0, winreg.REG_SZ, drop_dir)
