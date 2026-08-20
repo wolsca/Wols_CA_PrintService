@@ -62,7 +62,7 @@ def reset_job_control():
 
 # --- MQTT Setup ---
 c = config.get_config()
-PREFIX = c["mqtt"].get("topic_prefix", "wolsca/printer")
+PREFIX = c["mqtt"].get("topic_prefix", "wols_ca/printer")
 HA_PREFIX = c["mqtt"].get("discovery_prefix", "homeassistant")
 
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
