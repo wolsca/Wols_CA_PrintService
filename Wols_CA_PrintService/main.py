@@ -4,12 +4,14 @@ import time
 import signal
 import threading
 import queue
+import platform
 import config
 import mqtt_service
 import hardware_dispatcher
 import pdf_processor
 import file_watcher
 import web_app
+import installer
 from watchdog.observers import Observer
 
 SERVICE_VERSION = "1.4.2"
@@ -24,7 +26,6 @@ def handle_termination(signum, frame):
     mqtt_service.request_cancel() # Wake up any waiting sleeps
 
 def enqueue_print_job(filepath, intake=None):
-    """Callback for the file watcher. Queues valid PDFs for processing."""
     name = os.path.basename(filepath)
     with queue_lock:
         queued_files.append(name)
@@ -32,7 +33,6 @@ def enqueue_print_job(filepath, intake=None):
     print(f"[Queue] Added '{name}' ({len(queued_files)} waiting).")
 
 def wait_for_flip(filename, sheets, instruction):
-    """Pauses the workflow and waits for the user to confirm the paper is flipped."""
     mqtt_service.waiting_for_user_action = True
     mqtt_service.set_state("WAITING_FOR_FLIP",
                            f"Front side done. Put the {sheets} sheet(s) back in the tray and press Continue.",
@@ -120,7 +120,6 @@ def process_print_job(filepath, intake=None):
 
         mqtt_service.set_state("COMPLETED", f"Processed {filename}", side=None)
 
-        # Process complete, clean up drop file
         if os.path.exists(filepath):
             os.remove(filepath)
 
@@ -146,7 +145,6 @@ def process_print_job(filepath, intake=None):
                                    filename=None, pages=0, sheets=0, sheets_done=0, side=None)
 
 def job_worker():
-    """Worker thread that processes the PDF queue sequentially."""
     while not shutdown_event.is_set():
         try:
             filepath, intake = job_queue.get(timeout=1.0)
@@ -175,20 +173,19 @@ def start_service():
     print(f"  Modular Architecture - Core orchestrator online")
     print(f"===================================================\n")
 
+    threading.Thread(target=installer.check_virtual_printer, daemon=True).start()
+
     mqtt_service.start_mqtt()
     httpd = web_app.start_web_app()
 
-    # Start Queue worker
     worker = threading.Thread(target=job_worker, daemon=True)
     worker.start()
 
-    # Scan existing files before starting the observer
     file_watcher.scan_directory(config.DROP_DIR, enqueue_print_job)
     for q_entry in config.get_config().get("intake", {}).get("queues", []):
         d = q_entry.get("directory")
         if d: file_watcher.scan_directory(d, enqueue_print_job, q_entry)
 
-    # Start Watchdog Observers
     observer = Observer()
     observer.schedule(file_watcher.PrintFolderWatcher(shutdown_event, enqueue_print_job), config.DROP_DIR, recursive=False)
     for q_entry in config.get_config().get("intake", {}).get("queues", []):
@@ -197,11 +194,8 @@ def start_service():
             observer.schedule(file_watcher.PrintFolderWatcher(shutdown_event, enqueue_print_job, q_entry), d, recursive=False)
 
     observer.start()
-
-    # Wait until terminated
     shutdown_event.wait()
 
-    # Cleanup
     mqtt_service.set_state("OFFLINE", "Service intentionally stopped.")
     if httpd: httpd.shutdown()
     observer.stop()
@@ -210,4 +204,13 @@ def start_service():
     print("[System] Service successfully shut down.")
 
 if __name__ == "__main__":
-    start_service()
+    if "--install-printer" in sys.argv:
+        if platform.system() == "Linux":
+            installer.perform_cups_printer_install()
+        elif platform.system() == "Windows":
+            installer.perform_admin_printer_install()
+        else:
+            print(f"[Error] Printer deployment is not supported on {platform.system()}.")
+            sys.exit(1)
+    else:
+        start_service()
