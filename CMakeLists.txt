@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.20)
 project(Wols_CA_PrintService LANGUAGES NONE)
 
 set(SERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Wols_CA_PrintService")
-set(SERVICE_SCRIPT "${SERVICE_DIR}/Wols_CA_PrintService.py")
+set(SERVICE_SCRIPT "${SERVICE_DIR}/main.py")
 set(SERVICE_CONFIG "${SERVICE_DIR}/WolsCAPrintService.json")
 
 if (WIN32)
@@ -19,6 +19,14 @@ endif ()
 add_custom_target(sources SOURCES
         "${SERVICE_SCRIPT}"
         "${SERVICE_CONFIG}"
+        "${SERVICE_SCRIPT}"
+        "${SERVICE_DIR}/config.py"
+        "${SERVICE_DIR}/mqtt_service.py"
+        "${SERVICE_DIR}/pdf_processor.py"
+        "${SERVICE_DIR}/hardware_dispatcher.py"
+        "${SERVICE_DIR}/file_watcher.py"
+        "${SERVICE_DIR}/web_app.py"
+        "${SERVICE_DIR}/web_strings.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/requirements.txt"
         "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
         "${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md"

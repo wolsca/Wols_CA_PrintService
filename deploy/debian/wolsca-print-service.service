@@ -11,7 +11,7 @@ Group=lp
 Environment=PYTHONUNBUFFERED=1
 Environment=WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json
 WorkingDirectory=/opt/wolsca-print-service
-ExecStart=/opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/Wols_CA_PrintService.py
+ExecStart=/opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/main.py
 Restart=on-failure
 RestartSec=10
 KillSignal=SIGTERM

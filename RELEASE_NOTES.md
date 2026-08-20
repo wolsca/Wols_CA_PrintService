@@ -106,7 +106,7 @@ affects file and directory names as well as the configuration file:
 | Old | New |
 | --- | --- |
 | `Wols_CA_Double_Sided_Print_Service/` | `Wols_CA_PrintService/` |
-| `Wols_CA_Double_Sided_Print_Service.py` | `Wols_CA_PrintService.py` |
+| `Wols_CA_Double_Sided_Print_Service.py` | `Wols_CA_PrintService.py_old` |
 | `Wols_CA_Double_Sided_Print_Service.slnx` / `.pyproj` | `Wols_CA_PrintService.slnx` / `.pyproj` |
 | `WolsCADoubleSided.json` | `WolsCAPrintService.json` |
 | `WolsCADoubleSided.linux.json` | `WolsCAPrintService.linux.json` |

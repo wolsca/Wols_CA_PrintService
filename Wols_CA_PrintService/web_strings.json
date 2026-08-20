@@ -1,0 +1,50 @@
+{
+  "en": {
+    "document": "Document",
+    "pagesSheets": "Pages / sheets",
+    "printingOn": "Printing on",
+    "queued": "Waiting jobs",
+    "optionsTitle": "My settings for the next print job",
+    "queuesTitle": "Printers you can choose in the print dialog",
+    "queuesHint": "Pick one of these printers on your device; the printer you choose decides how the document is printed.",
+    "historyTitle": "Last print jobs",
+    "noHistory": "No print jobs yet.",
+    "continueButton": "Paper re-inserted - CONTINUE",
+    "reprintButton": "Print the front side again",
+    "cancelButton": "Cancel this print job",
+    "applyButton": "Use these settings",
+    "confirmCancel": "Cancel the current print job?",
+    "oneCopy": "1 copy",
+    "copiesSuffix": " copies",
+    "pagesUnit": " pages / ",
+    "sheetsUnit": " sheets",
+    "updated": "updated",
+    "defaultSuffix": " (default)",
+    "duplexSuffix": " - duplex, no flip",
+    "choiceActive": "Your settings are used for the next job (%s s left).",
+    "choiceInactive": "Without a choice the administrator settings are used.",
+    "modes": {
+      "Booklet": "Booklet (A5, fold in the middle)",
+      "Duplex": "Double sided (front and back)",
+      "Simplex": "Single sided (one page per sheet)",
+      "Standard": "Standard (one side per sheet)",
+      "Bypass": "Bypass (send as it is)"
+    },
+    "states": {
+      "IDLE": "Ready",
+      "STARTING": "Starting",
+      "PROCESSING": "Preparing booklet",
+      "PRINTING": "Printing",
+      "WAITING_FOR_FLIP": "Waiting for you to flip the paper",
+      "COMPLETED": "Done",
+      "CANCELLED": "Cancelled",
+      "ERROR": "Something went wrong",
+      "OFFLINE": "Service stopped"
+    },
+    "results": {
+      "COMPLETED": "done",
+      "ERROR": "failed",
+      "CANCELLED": "cancelled"
+    }
+  }
+}

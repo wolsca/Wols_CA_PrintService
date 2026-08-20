@@ -74,7 +74,7 @@ Omit `--with-cups` if you want to set the queue up later:
 ```bash
 sudo WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json \
      /opt/wolsca-print-service/venv/bin/python \
-     /opt/wolsca-print-service/Wols_CA_PrintService.py --install-printer
+     /opt/wolsca-print-service/main.py --install-printer
 ```
 
 ## 4. Configure

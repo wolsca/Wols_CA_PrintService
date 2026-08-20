@@ -21,17 +21,21 @@ A Python print service that watches a drop folder for PDFs, imposes them into A5
 
 The recommended way to deploy the service is on a dedicated Linux server or LXC container.
 
-### 1. Install Dependencies
+### 1. Install Dependencies:
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip
+    sudo apt update
+    sudo apt install -y git python3 python3-venv python3-pip
 ```
 
-### 2. Clone and Install
+2.  **Install Virtual Printer**:
 ```bash
-git clone https://github.com/wolsca/Wols_CA_PrintService.git /usr/local/src/wolsca-print-service
-cd /usr/local/src/wolsca-print-service
-sudo ./deploy/debian/install.sh --with-cups
+    - **Linux**: `sudo python3 main.py --install-printer`
+    - **Windows**: Run the script with Administrative privileges: `python main.py --install-printer`. This downloads and configures PDFCreator.
+```
+
+3.  **Run Service**:
+```bash
+    python3 main.py
 ```
 
 The installer performs the following:
@@ -62,7 +66,18 @@ If you prefer to run the service from source or on Windows:
     ```bash
     python3 Wols_CA_PrintService.py
     ```
-
+## Project Layout
+```text
+Wols_CA_PrintService/
+    main.py                     Core orchestrator and queue worker
+    config.py                   Configuration management
+    mqtt_service.py             MQTT and Home Assistant logic
+    pdf_processor.py            Booklet imposition and PDF handling
+    hardware_dispatcher.py      Raw TCP and CUPS dispatch
+    file_watcher.py             Directory monitoring
+    web_app.py                  Mobile interface hosting
+    web_strings.json            UI translations
+    WolsCAPrintService.json     Runtime configuration (development)
 ---
 
 ## Choose Mode in the Print Dialog

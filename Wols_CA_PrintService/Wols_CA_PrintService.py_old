@@ -22,7 +22,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from pypdf import PdfReader, PdfWriter, PageObject, Transformation
 
-SERVICE_VERSION = "1.4.1"
+SERVICE_VERSION = "1.4.2"
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_LINUX = platform.system() == "Linux"
@@ -204,7 +204,7 @@ ERROR_DIR = config.get("paths", {}).get("error_directory", os.path.join(TEMP_DIR
 
 MQTT_BROKER = config["mqtt"]["broker_ip"]
 MQTT_PORT = config["mqtt"]["broker_port"]
-PREFIX = config["mqtt"].get("topic_prefix", "wolsca/printer")
+PREFIX = config["mqtt"].get("topic_prefix", "wols_ca/printer_service")
 HA_PREFIX = config["mqtt"].get("discovery_prefix", "homeassistant")
 
 MQTT_USER = config["settings"]["user"]
@@ -224,10 +224,6 @@ for directory in [DROP_DIR, TEMP_DIR, ERROR_DIR]:
 # ============================================================================
 # 1a. INTAKE QUEUES (ONE VISIBLE PRINTER PER PRINT MODE)
 # ============================================================================
-# Every intake queue is a shared CUPS queue with its own cups-pdf output
-# directory. The directory a document arrives in decides the print mode, so the
-# user simply picks 'Booklet', 'Double sided' or 'Single sided' in the normal
-# print dialog of any device.
 def intake_queues():
     """Normalized list of the configured intake queues (may be empty)."""
     section = config.get("intake", {}) or {}
@@ -268,16 +264,10 @@ prepare_intake_directories()
 # ============================================================================
 state_lock = threading.Lock()
 
-# Personal (per browser) printer choices made in the web app: token -> printer id.
 personal_choices = {}
-# The choice that will be applied to the next incoming job, with its expiry.
 pending_choice = {"printer_id": None, "expires": 0.0, "token": None}
-
-# Sticky per browser job options (copies / print mode), same idea as the printer choice.
 personal_options = {}
 pending_options = {"copies": None, "print_mode": None, "expires": 0.0, "token": None}
-
-# Job control flags, set from the web app or MQTT while a job is running.
 job_control = {"cancel": False, "reprint_front": False}
 
 job_state = {
@@ -337,9 +327,7 @@ def printer_targets():
             "host": host,
             "port": int(entry.get("port", 9100)),
             "location": entry.get("location", ""),
-            # A real duplex printer prints both sides itself, so no flip is needed.
             "duplex": bool(entry.get("duplex", False)),
-            # 'raw' = port 9100 socket, 'cups' = local CUPS queue with page progress.
             "dispatch": str(entry.get("dispatch", "raw")).lower(),
             "cups_queue": entry.get("cups_queue", ""),
             "flip_instruction": entry.get("flip_instruction", "")
@@ -355,7 +343,6 @@ def find_printer(printer_id):
     return None
 
 def default_printer():
-    """The printer chosen by the administrator in the configuration file."""
     configured = config.get("printers", {}).get("default")
     return find_printer(configured) or printer_targets()[0]
 
@@ -366,7 +353,6 @@ def personal_choice_ttl():
         return 900.0
 
 def set_personal_printer(token, printer_id):
-    """Stores a personal (per device) printer choice made in the web app."""
     target = find_printer(printer_id)
     if not target:
         return None
@@ -380,7 +366,6 @@ def set_personal_printer(token, printer_id):
     return target
 
 def set_default_printer(printer_id):
-    """Administrator action: change the system wide default printer."""
     target = find_printer(printer_id)
     if not target:
         return None
@@ -390,7 +375,6 @@ def set_default_printer(printer_id):
     return target
 
 def resolve_target_printer():
-    """A valid personal choice wins over the administrator default."""
     with state_lock:
         printer_id = pending_choice["printer_id"]
         expires = pending_choice["expires"]
@@ -409,7 +393,6 @@ def consume_pending_choice():
 PRINT_MODES = ["Bypass", "Standard", "Simplex", "Duplex", "Booklet"]
 
 def set_personal_options(token, copies=None, print_mode=None):
-    """Stores per device job options (copies, print mode) for the next job."""
     stored = personal_options.setdefault(token, {})
     if copies is not None:
         copies = max(1, min(20, int(copies)))
@@ -427,7 +410,6 @@ def set_personal_options(token, copies=None, print_mode=None):
     return stored
 
 def resolve_job_options():
-    """Personal (web app) options win over the configured defaults."""
     with state_lock:
         copies = pending_options["copies"]
         print_mode = pending_options["print_mode"]
@@ -447,13 +429,12 @@ def consume_pending_options():
         pending_options["token"] = None
 
 # ============================================================================
-# 1c. PUSH NOTIFICATIONS (ntfy / GOTIFY COMPATIBLE HTTP POST)
+# 1c. PUSH NOTIFICATIONS
 # ============================================================================
 def notify_config():
     return config.get("notify", {}) or {}
 
 def public_base_url():
-    """URL a phone can use to reach the web app, for the notification action."""
     configured = config.get("web", {}).get("public_url", "").strip()
     if configured:
         return configured.rstrip("/")
@@ -461,7 +442,6 @@ def public_base_url():
     return f"http://{socket.gethostname()}.local:{port}"
 
 def send_push_notification(title, message, tags="printer", actions=None):
-    """Fire-and-forget POST to an ntfy compatible server; never breaks a job."""
     settings = notify_config()
     if not settings.get("enabled"):
         return
@@ -496,7 +476,6 @@ def send_push_notification(title, message, tags="printer", actions=None):
     threading.Thread(target=worker, daemon=True).start()
 
 def notify_flip_required(filename, sheets, instruction):
-    """The one notification that really matters: go and flip the paper."""
     resume_url = f"{public_base_url()}/api/resume"
     send_push_notification(
         title="Turn the paper over",
@@ -529,7 +508,6 @@ FRIENDLY_ERRORS = [
 ]
 
 def friendly_error(message):
-    """Turns an internal exception text into a sentence a user understands."""
     lowered = str(message).lower()
     for needle, sentence in FRIENDLY_ERRORS:
         if needle in lowered:
@@ -537,7 +515,7 @@ def friendly_error(message):
     return f"Something went wrong: {message}"
 
 # ============================================================================
-# 1e. JOB HISTORY (LAST N JOBS, KEPT IN MEMORY AND ON DISK)
+# 1e. JOB HISTORY
 # ============================================================================
 history_lock = threading.Lock()
 job_history = []
@@ -775,7 +753,6 @@ def on_message(client, userdata, msg):
         mqtt_client.publish(f"{PREFIX}/settings/mode/state", payload, retain=True)
 
     elif topic == f"{PREFIX}/settings/printer/set":
-        # Home Assistant sends the display name; treat it as an admin action.
         chosen = next((t for t in printer_targets() if t["name"] == payload), None)
         if chosen and set_default_printer(chosen["id"]):
             mqtt_client.publish(f"{PREFIX}/settings/printer/state", chosen["name"], retain=True)
@@ -787,10 +764,9 @@ mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
 # ============================================================================
-# 3. PDF MANIPULATION (IMPOSITION & FAULT TOLERANCE)
+# 3. PDF MANIPULATION
 # ============================================================================
 def validate_pdf(input_pdf_path):
-    """Fails fast with a clear message on encrypted, empty or corrupt PDFs."""
     try:
         reader = PdfReader(input_pdf_path)
     except Exception as e:
@@ -881,7 +857,6 @@ def generate_booklet_pdfs(input_pdf_path):
         raise ValueError(f"Corrupt or unreadable PDF file: {str(e)}")
 
 def generate_duplex_booklet_pdf(front_pdf_path, back_pdf_path, base_name):
-    """Interleaves the imposed sides so a duplex printer needs no manual flip."""
     front_reader = PdfReader(front_pdf_path)
     back_reader = PdfReader(back_pdf_path)
     writer = PdfWriter()
@@ -896,11 +871,6 @@ def generate_duplex_booklet_pdf(front_pdf_path, back_pdf_path, base_name):
     return duplex_path
 
 def generate_two_sided_pdfs(input_pdf_path):
-    """
-    Splits a document into odd and even pages for the 'Duplex' mode on a printer
-    without a duplex unit: the odd pages are printed first, the user puts the
-    stack back and the even pages are printed on the other side.
-    """
     reader = PdfReader(input_pdf_path)
     page_count = len(reader.pages)
     base_name = os.path.basename(input_pdf_path)
@@ -919,7 +889,7 @@ def generate_two_sided_pdfs(input_pdf_path):
     return front_path, back_path, page_count
 
 # ============================================================================
-# 4. JOB CONTROL (CANCEL / REPRINT) AND HARDWARE DISPATCH
+# 4. JOB CONTROL AND HARDWARE DISPATCH
 # ============================================================================
 class JobCancelled(Exception):
     """Raised when the running job is cancelled by the user or a timeout."""
@@ -928,7 +898,6 @@ DEFAULT_FLIP_INSTRUCTION = ("Take the whole stack out of the output tray, do NOT
                             "and put it back in the paper tray printed side down, top edge first.")
 
 def flip_instruction_for(target):
-    """Per printer wording wins over the global one, which wins over the default."""
     return (target.get("flip_instruction")
             or config.get("hardware", {}).get("flip_instruction")
             or DEFAULT_FLIP_INSTRUCTION)
@@ -940,14 +909,12 @@ def flip_timeout_seconds():
         return 1800
 
 def request_cancel():
-    """Cancels the running job; also releases a pending flip wait."""
     global waiting_for_user_action
     with state_lock:
         job_control["cancel"] = True
     waiting_for_user_action = False
 
 def request_reprint_front():
-    """Prints the front side again, e.g. after a paper jam."""
     global waiting_for_user_action
     with state_lock:
         job_control["reprint_front"] = True
@@ -972,6 +939,12 @@ def dispatch_via_socket(pdf_path, target, copies):
     """Raw JetDirect transfer on port 9100 (no feedback from the printer)."""
     printer_ip = target["host"]
     port = int(target.get("port", 9100))
+
+    # Security & Protocol Guard: Prevent sending raw bytes to HTTPS/IPP port.
+    if port in (443, 631):
+        print(f"[Hardware] Warning: Port {port} is for IPP/IPPS, but dispatch mode is 'raw'. Overriding to port 9100 for JetDirect raw socket transfer.")
+        port = 9100
+
     print(f"[Hardware] Direct TCP Socket transfer initiating to {printer_ip}:{port}")
 
     with open(pdf_path, 'rb') as f:
@@ -1014,7 +987,6 @@ def ipp_request_file():
     return path
 
 def cups_job_impressions(queue_name, job_id):
-    """Real page level progress: asks CUPS how many sides it already printed."""
     if not shutil.which("ipptool"):
         return None
     try:
@@ -1033,11 +1005,8 @@ def cups_job_impressions(queue_name, job_id):
     return None
 
 def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, sides=None):
-    """Sends the job through a local CUPS queue, so page progress is available."""
     queue_name = target.get("cups_queue") or target["id"]
     command = ["lp", "-d", queue_name, "-n", str(copies)]
-    # An explicit 'sides' value (forced single/double sided) wins over the
-    # booklet duplex default of short edge binding.
     if not sides and duplex:
         sides = "two-sided-short-edge"
     if sides:
@@ -1083,11 +1052,6 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
 
 def dispatch_to_printer_ipp(pdf_path, print_mode_name, target=None, side=None,
                             copies=1, duplex=False, total_sheets=0, sides=None):
-    """
-    Submits the document to the physical printer, either through a local CUPS
-    queue (with page progress) or as a raw socket transfer on port 9100.
-    The target printer is the personal choice from the web app, or the admin default.
-    """
     target = target or default_printer()
     if cancel_requested():
         raise JobCancelled("Cancelled before printing started.")
@@ -1106,10 +1070,6 @@ def dispatch_to_printer_ipp(pdf_path, print_mode_name, target=None, side=None,
 # 5. CORE WORKFLOW
 # ============================================================================
 def wait_for_flip(filename, sheets, instruction):
-    """
-    Waits until the user confirms the paper is back in the tray. Returns
-    'resume' or 'reprint'; raises JobCancelled on cancel, timeout or shutdown.
-    """
     global waiting_for_user_action
 
     timeout = flip_timeout_seconds()
@@ -1164,16 +1124,12 @@ def process_print_job(filepath, intake=None):
     reset_job_control()
 
     copies = options["copies"]
-    # The queue the document arrived on is the choice the user made in the
-    # print dialog, so it wins over the personal web app choice and the default.
     if intake and intake.get("print_mode") in PRINT_MODES:
         print_mode = intake["print_mode"]
         print(f"[Intake] Queue '{intake['cups_queue']}' forces mode {print_mode}.")
     else:
         print_mode = options["print_mode"]
     instruction = flip_instruction_for(target)
-    # A real duplex printer prints both sides itself, but only through CUPS,
-    # because the raw socket transfer cannot carry the 'sides' option.
     duplex = bool(target.get("duplex")) and target.get("dispatch") == "cups" and bool(shutil.which("lp"))
     if target.get("duplex") and not duplex:
         print("[Logic] Printer is marked duplex but is not reachable through CUPS; "
@@ -1224,7 +1180,6 @@ def process_print_job(filepath, intake=None):
             publish_log(f"Successfully completed printing '{filename}' in Booklet mode.", "success")
 
         elif print_mode == "Duplex":
-            # Forced double sided: no imposition, one page per side of a sheet.
             sheets = (pages + 1) // 2
             print("[Logic] Duplex Mode (forced double sided, no imposition).")
             set_state("PROCESSING", f"{pages} pages become {sheets} sheet(s)",
@@ -1255,7 +1210,6 @@ def process_print_job(filepath, intake=None):
             publish_log(f"Successfully completed printing '{filename}' in Duplex mode.", "success")
 
         elif print_mode == "Simplex":
-            # Forced single sided: one page per sheet, never a flip.
             print("[Logic] Simplex Mode (forced single sided).")
             sheets = pages
             dispatch_to_printer_ipp(filepath, "Simplex", target, copies=copies,
@@ -1320,7 +1274,6 @@ def process_print_job(filepath, intake=None):
 # 6. DIRECTORY WATCHER
 # ============================================================================
 def wait_until_file_is_complete(filepath, timeout=120.0):
-    """Waits until the file size stops growing (cups-pdf/PDFCreator still writing)."""
     deadline = time.time() + timeout
     last_size = -1
     while time.time() < deadline and not shutdown_event.is_set():
@@ -1335,15 +1288,20 @@ def wait_until_file_is_complete(filepath, timeout=120.0):
     return os.path.exists(filepath)
 
 class PrintFolderWatcher(FileSystemEventHandler):
-    """Watches one drop directory; 'intake' fixes the print mode of that queue."""
     def __init__(self, intake=None):
         super().__init__()
         self.intake = intake
 
     def on_created(self, event):
-        if not event.is_directory and event.src_path.lower().endswith(".pdf"):
-            if wait_until_file_is_complete(event.src_path):
-                enqueue_print_job(event.src_path, self.intake)
+        if not event.is_directory:
+            ext = os.path.splitext(event.src_path)[1].lower()
+            if ext == ".pdf":
+                if wait_until_file_is_complete(event.src_path):
+                    enqueue_print_job(event.src_path, self.intake)
+            elif ext in [".prn", ".ps", ".pcl"]:
+                filename = os.path.basename(event.src_path)
+                print(f"[Warning] Ignored {ext} file: {filename}. The service requires PDF files for Booklet imposition.")
+                publish_log(f"Ignored unsupported file format '{filename}'. Please ensure the Windows queue uses a PDF driver.", "warning")
 
 def scan_directory(directory, intake=None):
     try:
@@ -1353,8 +1311,13 @@ def scan_directory(directory, intake=None):
         return
     for filename in names:
         path = os.path.join(directory, filename)
-        if filename.lower().endswith(".pdf") and os.path.isfile(path):
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(filename)[1].lower()
+        if ext == ".pdf":
             enqueue_print_job(path, intake)
+        elif ext in [".prn", ".ps", ".pcl"]:
+            print(f"[Warning] Ignored {ext} file: {filename}. The service requires PDF files.")
 
 def scan_existing_files():
     print("[System] Scanning for existing files in the drop directories...")
@@ -1363,7 +1326,7 @@ def scan_existing_files():
         scan_directory(queue_entry["directory"], queue_entry)
 
 # ============================================================================
-# 6a. JOB QUEUE (ONE JOB AT A TIME, WITH A VISIBLE WAITING COUNT)
+# 6a. JOB QUEUE
 # ============================================================================
 job_queue = queue.Queue()
 queue_lock = threading.Lock()
@@ -1371,7 +1334,6 @@ queued_files = []
 active_file = {"name": None}
 
 def enqueue_print_job(filepath, intake=None):
-    """Queues the file so a second document waits instead of interleaving."""
     name = os.path.basename(filepath)
     with queue_lock:
         queued_files.append(name)
@@ -1388,7 +1350,6 @@ def queue_snapshot():
         return {"active": active_file["name"], "waiting": list(queued_files)}
 
 def job_worker():
-    """Single worker so only one document is printed at a time."""
     while not shutdown_event.is_set():
         try:
             filepath, intake = job_queue.get(timeout=0.5)
@@ -1410,7 +1371,7 @@ def job_worker():
             job_queue.task_done()
 
 # ============================================================================
-# 6b. MOBILE WEB APP (STATUS, FLIP CONFIRMATION, PRINTER SELECTION)
+# 6b. MOBILE WEB APP
 # ============================================================================
 WEB_PAGE = """<!DOCTYPE html>
 <html lang="__LANG__">
@@ -1789,7 +1750,6 @@ __QR__
 """
 
 def render_qr_page():
-    """QR code for the web app URL; falls back to the plain address."""
     url = public_base_url() + "/"
     markup = "<p>(install the optional 'segno' package to get a QR code here)</p>"
     try:
@@ -1807,7 +1767,6 @@ def web_title():
     return config.get("web", {}).get("title", "Wols CA Booklet Printer")
 
 def status_snapshot(token):
-    """State shown in the web app, including the resolved target printer."""
     with state_lock:
         snapshot = dict(job_state)
         my_printer_id = personal_choices.get(token)
@@ -1861,9 +1820,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
     server_version = "WolsCAPrintService"
 
     def log_message(self, fmt, *args):
-        pass  # keep the journal readable
+        pass
 
-    # -- helpers ------------------------------------------------------------
     def client_token(self):
         cookies = self.headers.get("Cookie", "")
         for part in cookies.split(";"):
@@ -1901,7 +1859,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
         except ValueError:
             return {key: values[0] for key, values in parse_qs(raw).items()}
 
-    # -- routes -------------------------------------------------------------
     def do_GET(self):
         token, is_new = self.client_token()
         cookie = token if is_new else None
@@ -2001,7 +1958,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, status=404)
 
 def start_web_app():
-    """Starts the phone friendly status/resume/printer-choice web app."""
     web_config = config.get("web", {})
     if not web_config.get("enabled", True):
         print("[Web] Web app disabled by configuration.")
@@ -2023,10 +1979,9 @@ def start_web_app():
     return httpd
 
 # ============================================================================
-# 7. ZERO-TOUCH DEPLOYMENT (AUTO-DOWNLOAD & INSTALL)
+# 7. ZERO-TOUCH DEPLOYMENT
 # ============================================================================
 def check_virtual_printer():
-    """Verifies that the virtual (job intake) printer exists on this host."""
     if IS_LINUX:
         check_cups_queue()
         return
@@ -2044,7 +1999,6 @@ def check_virtual_printer():
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" --install-printer', None, 1)
 
 def check_cups_queue():
-    """Linux: verifies that the cups-pdf backed queue is present."""
     queue = config["virtual_printer"].get("cups_queue_name", "WolsCA_Booklet")
 
     if not shutil.which("lpstat"):
@@ -2063,7 +2017,6 @@ def check_cups_queue():
             print(f"[Zero-Touch] CUPS queue '{queue_name}' is available.")
 
 def run_root_command(args, description):
-    """Runs a privileged setup command and reports the outcome."""
     print(f"[Admin] {description}")
     try:
         subprocess.run(args, check=True)
@@ -2075,7 +2028,6 @@ def run_root_command(args, description):
     return False
 
 def configure_cups_pdf(drop_dir, conf_path="/etc/cups/cups-pdf.conf", template=None):
-    """Points a cups-pdf instance at its drop directory instead of the home folder."""
     if not os.path.exists(conf_path):
         source = template or "/etc/cups/cups-pdf.conf"
         if os.path.exists(source):
@@ -2115,7 +2067,6 @@ def configure_cups_pdf(drop_dir, conf_path="/etc/cups/cups-pdf.conf", template=N
         print(f"[Warning] Could not update {conf_path}: {e}")
 
 def find_cups_pdf_ppd():
-    """The cups-pdf PPD location differs between Debian and Ubuntu releases."""
     candidates = [
         "/usr/share/ppd/cups-pdf/CUPS-PDF_opt.ppd",
         "/usr/share/ppd/cups-pdf/CUPS-PDF_noopt.ppd",
@@ -2131,25 +2082,17 @@ def find_cups_pdf_ppd():
     return None
 
 def cups_backend_dir():
-    """The CUPS backend directory differs between distributions."""
     for path in ("/usr/lib/cups/backend", "/usr/libexec/cups/backend"):
         if os.path.isdir(path):
             return path
     return None
 
 def ensure_cups_pdf_instance(queue_entry):
-    """
-    Creates a private cups-pdf backend instance for one intake queue.
-    cups-pdf reads /etc/cups/cups-pdf-<suffix>.conf when it is called as
-    'cups-pdf-<suffix>', which is what gives every queue its own directory.
-    Returns the device URI to use for the queue.
-    """
     backend_dir = cups_backend_dir()
     base_backend = os.path.join(backend_dir, "cups-pdf") if backend_dir else None
     directory = queue_entry["directory"]
 
     os.makedirs(directory, exist_ok=True)
-    # setgid + group writable: cups-pdf (root/lp) and the service user share it.
     os.chmod(directory, 0o2775)
 
     if not base_backend or not os.path.exists(base_backend):
@@ -2169,7 +2112,6 @@ def ensure_cups_pdf_instance(queue_entry):
         return "cups-pdf:/"
 
 def create_intake_queue(queue_entry, share):
-    """Publishes one visible, driverless queue for a single print mode."""
     queue_name = queue_entry["cups_queue"]
     device_uri = ensure_cups_pdf_instance(queue_entry)
     ppd = find_cups_pdf_ppd()
@@ -2178,7 +2120,6 @@ def create_intake_queue(queue_entry, share):
     lpadmin_args += ["-P", ppd] if ppd else ["-m", "everywhere"]
     lpadmin_args += [
         "-o", "printer-is-shared=" + ("true" if share else "false"),
-        # Advertise the queue as driverless/AirPrint capable for phones and tablets.
         "-o", "document-format-default=application/pdf",
         "-D", queue_entry["description"],
         "-L", "Wols CA Print Service"
@@ -2188,7 +2129,6 @@ def create_intake_queue(queue_entry, share):
     run_root_command(["cupsaccept", queue_name], f"Accepting jobs on '{queue_name}'")
 
 def advertise_web_app_over_mdns():
-    """Publishes the web app as _http._tcp so phones find http://<host>.local:<port>/."""
     if not shutil.which("avahi-daemon"):
         print("[Warning] avahi-daemon not installed; skipping mDNS advertising.")
         return
@@ -2219,7 +2159,6 @@ def advertise_web_app_over_mdns():
         print(f"[Warning] Could not write {service_file}: {e}")
 
 def perform_cups_printer_install():
-    """Linux: installs CUPS + cups-pdf and publishes the intake queue."""
     print("\n===================================================")
     print("  Wols CA CUPS Intake Printer Deployment Started    ")
     print("===================================================\n")
@@ -2245,7 +2184,6 @@ def perform_cups_printer_install():
 
     print("[Admin] 2/5: Configuring cups-pdf output directory...")
     os.makedirs(drop_dir, exist_ok=True)
-    # setgid + group writable: cups-pdf (root/lp) and the service user share the folder.
     os.chmod(drop_dir, 0o2775)
     configure_cups_pdf(drop_dir)
 
@@ -2283,11 +2221,9 @@ def perform_cups_printer_install():
     sys.exit(0)
 
 def download_installer(url, dest_path):
-    """Automates the download of the required installer package."""
     print(f"[Network] Downloading dependencies from: {url}")
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        # Create unverified context to prevent issues on rigid corporate firewalls/old root certs
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -2301,7 +2237,6 @@ def download_installer(url, dest_path):
         return False
 
 def perform_admin_printer_install():
-    """Runs with Administrator privileges to download, install and configure."""
     print("\n===================================================")
     print("  Wols CA Zero-Touch Printer Deployment Started    ")
     print("===================================================\n")
@@ -2382,7 +2317,6 @@ def start_service():
 
     observer = Observer()
     observer.schedule(PrintFolderWatcher(), DROP_DIR, recursive=False)
-    # One watcher per intake queue: the directory decides the print mode.
     for queue_entry in intake_queues():
         observer.schedule(PrintFolderWatcher(queue_entry),
                           queue_entry["directory"], recursive=False)

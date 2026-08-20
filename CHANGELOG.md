@@ -4,10 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+
+### Changed
+Refactored the monolithic Wols_CA_PrintService.py script into a highly readable, modular architecture (main.py, pdf_processor.py, etc.) for improved maintainability.
+
+### Changed
+Added: Extracted hard-coded UI texts into web_strings.json to facilitate easy translations.
+
+
+
 ### Changed
 - Renamed the project from "Wols CA Double Sided Print Service" to "Wols CA Print Service":
-  - Source folder and script: `Wols_CA_PrintService/Wols_CA_PrintService.py`.
+  - Source folder and script: `Wols_CA_PrintService/Wols_CA_PrintService.py_old`.
   - Project files: `Wols_CA_PrintService.slnx` / `.pyproj`.
   - Configuration files: `WolsCADoubleSided.json` -> `WolsCAPrintService.json` and
     `WolsCADoubleSided.linux.json` -> `WolsCAPrintService.linux.json`.
