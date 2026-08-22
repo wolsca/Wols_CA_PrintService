@@ -28,12 +28,12 @@ out of GitHub:
 
 ```powershell
 Copy-Item deploy/docker/.env.local.example deploy/docker/.env.local
-# then fill in WOLSCA_MQTT_USER / WOLSCA_MQTT_PASSWORD and WOLSCA_ADMIN_TOKEN
+# then fill in WOLSCA_MQTT_PASSWORD and WOLSCA_ADMIN_TOKEN (WOLSCA_MQTT_USER defaults to wolsca_mqtt)
 ```
 
-Only the broker address, the MQTT credentials, the topic prefix and the admin
-token are taken from that file; everything else stays as in
-`WolsCAPrintService.json`.
+Only the broker address, the MQTT credentials (`mqtt.user`, `mqtt.password`),
+the topic prefix and the admin token are taken from that file; everything else
+stays as in `WolsCAPrintService.json`.
 
 Then, from the repository root:
 

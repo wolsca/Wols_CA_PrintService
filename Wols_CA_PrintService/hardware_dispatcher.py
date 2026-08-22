@@ -48,6 +48,212 @@ def cups_job_impressions(queue_name, job_id):
                 return int(digits)
     return None
 
+IPP_MANUAL_DUPLEX_REQUEST = """{
+    OPERATION Print-Job
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR naturalLanguage attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR name requesting-user-name wolsca
+    ATTR name job-name $job-name
+    ATTR mimeMediaType document-format application/pdf
+    GROUP job-attributes-tag
+    ATTR integer copies $copies
+    ATTR keyword sides $sides
+    ATTR integer manual-duplex-sheet-count $sheet-count
+    ATTR keyword media $media
+    FILE $filename
+}
+"""
+
+IPP_PRINTER_JOB_REQUEST = """{
+    OPERATION Get-Job-Attributes
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR naturalLanguage attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR integer job-id $job-id
+    ATTR keyword requested-attributes job-state,job-state-reasons,job-impressions-completed
+}
+"""
+
+
+IPP_MANUAL_TRAY_REQUEST = """{
+    OPERATION Print-Job
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR naturalLanguage attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR name requesting-user-name wolsca
+    ATTR name job-name $job-name
+    ATTR mimeMediaType document-format application/pdf
+    GROUP job-attributes-tag
+    ATTR integer copies $copies
+    ATTR keyword sides one-sided
+    ATTR keyword media $media
+    ATTR collection media-col {
+        MEMBER keyword media-source $media-source
+    }
+    FILE $filename
+}
+"""
+
+
+def ipp_template_file(name, body):
+    """Writes (once) an ipptool request template into the temp directory."""
+    path = os.path.join(config.TEMP_DIR, name)
+    if not os.path.exists(path):
+        with open(path, 'w') as f:
+            f.write(body)
+    return path
+
+
+def ipp_attribute(output, name):
+    """The value of one attribute out of verbose ipptool output."""
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{name} ") and "=" in stripped:
+            return stripped.split("=", 1)[1].strip()
+    return None
+
+
+def dispatch_via_ipp_manual_duplex(pdf_path, uri, copies, sides, sheet_count,
+                                   side, shutdown_event=None):
+    """Manual duplex handled by the printer itself, over IPP.
+
+    The printer prints the front sides, asks on its own display to put the stack
+    back in the tray and finishes the job when the button on the printer is
+    pressed. It is deliberately not routed through CUPS: printers offering this
+    report 'sides-supported = one-sided', so the 'everywhere' queue would strip
+    the two-sided request.
+    """
+    if not shutil.which("ipptool"):
+        raise ValueError("'ipptool' is required for printer confirmed flipping.")
+
+    request = ipp_template_file("print-job-manual-duplex.test", IPP_MANUAL_DUPLEX_REQUEST)
+    command = ["ipptool", "-tv",
+               "-d", f"copies={copies}",
+               "-d", f"sides={sides}",
+               "-d", f"sheet-count={sheet_count}",
+               "-d", "media=iso_a4_210x297mm",
+               "-d", f"job-name={os.path.basename(pdf_path)}",
+               "-d", f"filename={pdf_path}",
+               uri, request]
+
+    print(f"[Hardware] Submitting to {uri} (sides={sides}, "
+          f"manual-duplex-sheet-count={sheet_count}).")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"The printer at {uri} did not accept the job in time.")
+
+    if result.returncode != 0 or "successful-ok" not in (result.stdout or ""):
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise ValueError(f"The printer refused the job: {detail[-1] if detail else 'no answer'}")
+
+    job_id = ipp_attribute(result.stdout, "job-id")
+    if not job_id or not job_id.isdigit():
+        print("[Hardware] Job accepted, but the printer returned no job id; not waiting for it.")
+        return
+
+    poll_ipp_job(uri, job_id, sheet_count * copies, side, shutdown_event)
+
+
+def dispatch_via_ipp_manual_tray(pdf_path, uri, copies, media_source, side,
+                                 shutdown_event=None):
+    """Sends the document to the manual feed slot of the printer.
+
+    The printer then asks on its own panel to load the paper and prints nothing
+    until the button there is pressed - the paper change without wasting a
+    sheet. Like the manual duplex flow this goes straight to the printer,
+    because the CUPS output queue would drop the media-source.
+    """
+    if not shutil.which("ipptool"):
+        raise ValueError("'ipptool' is required for the paper change on the printer.")
+
+    request = ipp_template_file("print-job-manual-tray.test", IPP_MANUAL_TRAY_REQUEST)
+    command = ["ipptool", "-tv",
+               "-d", f"copies={copies}",
+               "-d", "media=iso_a4_210x297mm",
+               "-d", f"media-source={media_source}",
+               "-d", f"job-name={os.path.basename(pdf_path)}",
+               "-d", f"filename={pdf_path}",
+               uri, request]
+
+    print(f"[Hardware] Submitting to {uri} (media-source={media_source}); "
+          f"the printer asks for the paper on its own panel.")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"The printer at {uri} did not accept the job in time.")
+
+    if result.returncode != 0 or "successful-ok" not in (result.stdout or ""):
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise ValueError(f"The printer refused the job: {detail[-1] if detail else 'no answer'}")
+
+    job_id = ipp_attribute(result.stdout, "job-id")
+    if not job_id or not job_id.isdigit():
+        print("[Hardware] Job accepted, but the printer returned no job id; not waiting for it.")
+        return
+
+    poll_ipp_job(uri, job_id, copies, side, shutdown_event,
+                 waiting_detail="Put the paper in the manual feed slot and press the "
+                                "button on the printer.")
+
+
+def poll_ipp_job(uri, job_id, expected, side, shutdown_event=None, waiting_detail=None):
+    """Follows a job on the printer until it leaves the queue.
+
+    While the printer waits for the sheets to be put back, its own panel is in
+    charge; the service only reports progress, it never asks for a Continue.
+    """
+    request = ipp_template_file("get-printer-job-attributes.test", IPP_PRINTER_JOB_REQUEST)
+    expected = max(1, expected)
+    reported_flip = False
+
+    while True:
+        if shutdown_event and shutdown_event.is_set():
+            break
+        if mqtt_service.cancel_requested():
+            raise JobCancelled("Cancelled while the printer was working.")
+
+        try:
+            result = subprocess.run(["ipptool", "-tv", "-d", f"job-id={job_id}", uri, request],
+                                    capture_output=True, text=True, timeout=20)
+        except Exception:
+            break
+
+        state = ipp_attribute(result.stdout, "job-state") or ""
+        reasons = ipp_attribute(result.stdout, "job-state-reasons") or ""
+        done = ipp_attribute(result.stdout, "job-impressions-completed")
+        sheets_done = int("".join(ch for ch in (done or "") if ch.isdigit()) or 0)
+
+        # The printer holds the job while it waits at its panel for the sheets.
+        waiting = state.startswith("pending-held") or any(
+            reason in reasons for reason in ("resources-are-not-ready", "job-printing-stopped",
+                                             "media-needed", "media-empty", "media-jam"))
+        if waiting:
+            if not reported_flip:
+                print("[Hardware] The printer is asking on its own panel to put the sheets back.")
+                reported_flip = True
+            mqtt_service.set_state("WAITING_FOR_FLIP",
+                                   waiting_detail or "Put the sheets back in the tray and "
+                                                     "press the button on the printer.",
+                                   sheets_done=min(sheets_done, expected), side="front",
+                                   flip_owner="printer")
+        else:
+            reported_flip = False
+            mqtt_service.set_state("PRINTING", f"Sheet {min(sheets_done, expected)} of {expected}",
+                                   sheets_done=min(sheets_done, expected), side=side,
+                                   flip_owner="printer")
+
+        if state.startswith(("completed", "canceled", "aborted")):
+            break
+        time.sleep(2)
+
+    print(f"[Hardware] Printer job {job_id} finished.")
+
+
 def dispatch_via_socket(pdf_path, target, copies):
     """Raw JetDirect transfer on port 9100 (no feedback from the printer)."""
     printer_ip = target["host"]
@@ -137,9 +343,14 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
     print(f"[Hardware] CUPS job {queue_name}-{job_id} finished.")
 
 def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
-                            copies=1, duplex=False, total_sheets=0, sides=None, shutdown_event=None):
+                            copies=1, duplex=False, total_sheets=0, sides=None, shutdown_event=None,
+                            manual_duplex_sheets=0):
     """
     Submits the document to the physical printer. Routes via CUPS or Raw TCP.
+
+    With manual_duplex_sheets the job goes straight to the printer over IPP, so
+    the printer itself asks for the flip on its panel (see
+    dispatch_via_ipp_manual_duplex).
     """
     if mqtt_service.cancel_requested():
         raise JobCancelled("Cancelled before printing started.")
@@ -147,7 +358,12 @@ def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
     mqtt_service.set_state("PRINTING", f"Dispatching {os.path.basename(pdf_path)} to {target['name']}",
                            side=side, sheets_done=0, printer_id=target["id"], printer_name=target["name"])
 
-    if target.get("dispatch") == "cups" and shutil.which("lp"):
+    if manual_duplex_sheets > 0:
+        uri = config.get_config()["hardware"].get("printer_uri", "")
+        dispatch_via_ipp_manual_duplex(pdf_path, uri, copies,
+                                       sides or "two-sided-long-edge",
+                                       manual_duplex_sheets, side, shutdown_event)
+    elif target.get("dispatch") == "cups" and shutil.which("lp"):
         dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, sides, shutdown_event)
     else:
         dispatch_via_socket(pdf_path, target, copies)

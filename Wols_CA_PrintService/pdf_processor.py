@@ -109,6 +109,27 @@ def generate_duplex_booklet_pdf(front_pdf_path, back_pdf_path, base_name):
         writer.write(out)
     return duplex_path
 
+def generate_blank_front_pdf(input_pdf_path):
+    """Puts a blank front side in front of the document.
+
+    Used for a single page in DoubleSided mode: the printer prints the blank
+    front, asks to put the sheet back and only then prints the page. That pause
+    is what makes it possible to load special paper for exactly this one page,
+    without the risk of another job using it.
+    """
+    reader = PdfReader(input_pdf_path)
+    first = reader.pages[0]
+    writer = PdfWriter()
+    writer.add_page(PageObject.create_blank_page(width=float(first.mediabox.width),
+                                                height=float(first.mediabox.height)))
+    for page in reader.pages:
+        writer.add_page(page)
+
+    path = os.path.join(config.TEMP_DIR, f"blankfront_{os.path.basename(input_pdf_path)}")
+    with open(path, "wb") as out:
+        writer.write(out)
+    return path
+
 def generate_two_sided_pdfs(input_pdf_path):
     """
     Splits a document into odd and even pages for the 'Duplex' mode on a printer

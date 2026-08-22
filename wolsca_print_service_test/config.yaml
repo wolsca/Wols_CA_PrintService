@@ -14,7 +14,7 @@ slug: wolsca_print_service_test
 description: >-
   Commit build of the Wols CA Print Service - for testing only, use the release
   add-on for normal operation.
-version: "build-1.4.384"
+version: "build-1.4.385"
 url: https://github.com/wolsca/Wols_CA_PrintService
 image: ghcr.io/wolsca/wols_ca_printservice
 arch:
@@ -41,15 +41,18 @@ options:
   mqtt_port: 1883
   mqtt_user: ""
   mqtt_password: ""
-  mqtt_topic_prefix: wols_ca/printer_test
+  mqtt_topic_prefix: wols_ca/print_service_test
   mqtt_discovery_prefix: homeassistant
   printer_uri: ipps://192.168.101.251:443/ipp/print
-  print_mode: Duplex
+  print_mode: DoubleSided
   flip_timeout_seconds: 1800
   web_port: 8081
   web_title: Wols CA Print Service (test)
   web_language: en
   admin_token: ""
+  notify_enabled: true
+  notify_url: https://ntfy.sh
+  notify_topic: ""
   auto_update: false
   allow_test_builds: true
 schema:
@@ -61,11 +64,14 @@ schema:
   mqtt_topic_prefix: str
   mqtt_discovery_prefix: str
   printer_uri: str
-  print_mode: list(Booklet|Duplex|Simplex)
+  print_mode: list(Booklet|DoubleSided|SingleSided)
   flip_timeout_seconds: int(30,86400)
   web_port: port
   web_title: str
   web_language: str
   admin_token: password?
+  notify_enabled: bool
+  notify_url: str
+  notify_topic: str?
   auto_update: bool
   allow_test_builds: bool

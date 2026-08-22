@@ -9,6 +9,18 @@ derivative such as Raspberry Pi OS works too). The installer detects the
 distribution from `/etc/os-release` and uses the same `apt` packages on all of
 them.
 
+A **minimal** installation (netinst without any task selected) is enough: step
+1/8 installs the complete dependency set itself - `ca-certificates`, `curl`,
+`wget`, the Python tool chain (`python3`, `-venv`, `-pip`, `-setuptools`,
+`-dev`, `build-essential`), `avahi-daemon`/`avahi-utils`/`libnss-mdns` for mDNS,
+and `iproute2`, `iputils-ping`, `procps`, `psmisc`, `file`, `less`, `tzdata`,
+`locales` plus the archive tools for the diagnostics and the updater. With
+`--with-cups` it also installs `cups`, `cups-daemon`, `cups-client`, `cups-bsd`,
+`cups-filters`, `cups-ipp-utils`, `printer-driver-cups-pdf`, `ghostscript` and
+`poppler-utils`. A package this distribution does not offer is reported and
+skipped instead of aborting the installation. Only `git` is a prerequisite -
+the checkout comes from it.
+
 For per-device usage (iPhone, Android, Windows, Linux) see
 [`../../docs/USER_GUIDE.md`](../../docs/USER_GUIDE.md).
 
@@ -101,7 +113,9 @@ sudo /opt/wolsca-print-service/fix-permissions.sh   # after an install
 
 The directory list is read from the live configuration (`paths.*` and
 `intake.queues[].directory`), so custom paths are covered too. The `permissions`
-phase of the self-test verifies all of this and reports it to Home Assistant.
+phase of the self-test verifies all of this and reports it to Home Assistant. The
+new `notify` phase sends a real test message to the configured ntfy topic:
+`main.py --self-test notify`.
 
 ## 4. Configure
 
@@ -111,10 +125,19 @@ Edit `/etc/wolsca/WolsCAPrintService.json` (MQTT broker/credentials, the physica
 sudo systemctl restart wolsca-print-service
 ```
 
+### MQTT Broker Accounts
+
+The default broker account name is `wolsca_mqtt`. When a Debian server and a Home
+Assistant add-on share one broker, create **both** accounts in Home Assistant's
+Mosquitto (e.g. `wolsca_mqtt` and `wolsca_mqtt_ha`). A Debian-only installation
+needs only `wolsca_mqtt`, created either in Home Assistant's Mosquitto or in
+EMQX/Mosquitto on the server itself.
+
 ### Key Configuration Sections
 
+- **`mqtt`**: Broker address, port and credentials (`user`, `password`).
 - **`printers`**: Lists physical printers, duplex support, and dispatch method (`raw` or `cups`).
-- **`notify`**: Push notifications via ntfy/Gotify (enabled, url, topic, priority).
+- **`notify`**: Push notifications via ntfy (enabled by default, default server `https://ntfy.sh`). If `topic` is empty, a unique one is generated and saved on first use.
 - **`history`**: Job history settings (enabled, max_entries).
 - **`web`**: Controls the built-in web app (port, language, public_url).
 
@@ -218,3 +241,6 @@ server - it is what the *Update now* button uses.
 | `Errno 13` on the configuration file | `sudo /opt/wolsca-print-service/fix-permissions.sh`; `/etc/wolsca` must be `0755` and the JSON `0664` |
 | Update button does nothing | `update.source_directory` must be a git checkout of the repository; run `main.py --self-test update` |
 | Version reported as `0.0.0` | `VERSION` and `BUILD_NUMBER` are missing in `/opt/wolsca-print-service`; re-run `install.sh` |
+| `Active: activating (auto-restart)` with `status=217/USER` | The `User=` of the unit does not exist. The installer deploys everything as `root`, so the unit must say `User=root`; re-run `install.sh`, which now keeps unit and installer in step |
+| Settings visible in Home Assistant but not changeable | The service is not running - Home Assistant keeps showing the retained MQTT values. `systemctl status wolsca-print-service`, then `journalctl -u wolsca-print-service -e` |
+| Configuration editor in the web app stays read-only | Set `web.admin_token` in `/etc/wolsca/WolsCAPrintService.json` and restart; without a token the editor is locked (the Home Assistant entities do not need the token) |

@@ -5,10 +5,11 @@ A Python print service that watches a drop folder for PDFs, imposes them into A5
 ## Features
 
 - **Automated Booklet Imposition**: Converts PDF pages into A5 booklet format (4 pages per A4 sheet).
-- **Multiple Intake Queues**: Choose the print mode (Booklet, Duplex, Simplex) directly in your device's print dialog by picking the corresponding virtual printer.
+- **Multiple Intake Queues**: Choose the print mode (Booklet, DoubleSided, SingleSided) directly in your device's print dialog by picking the corresponding virtual printer.
 - **Double-Sided Workflow**: Prints the front side, waits for the user to flip the paper, and prints the back side upon confirmation.
-- **New Print Modes**: Forced single-sided (Simplex) and double-sided (Duplex) printing for all document types.
-- **Push Notifications**: Receive a ping on your phone when paper needs to be flipped or when an error occurs via ntfy/Gotify.
+- **Flip Confirmed on the Printer**: When the printer offers AirPrint/Mopria manual duplex, it asks for the flip on its own display and the Continue button in the web app and in Home Assistant is taken away, so there is never a second button competing with it (see *Who confirms the flip*).
+- **New Print Modes**: Forced single sided (SingleSided) and double sided (DoubleSided) printing for all document types.
+- **Push Notifications**: On by default: a ping on your phone when the paper has to be flipped, when a job fails and when a document is finished (ntfy).
 - **Mobile Web App**: Real-time status with page progress, paper flip confirmation, printer/mode/copies selection, and job history.
 - **Home Assistant Integration**: MQTT discovery for status sensors, mode/printer selection, and remote control (Resume/Cancel/Reprint).
 - **Duplex Printer Support**: Automatic double-sided printing for supported printers (no manual flip required).
@@ -20,22 +21,45 @@ A Python print service that watches a drop folder for PDFs, imposes them into A5
 ## Installation (Debian 12+ / Ubuntu 22.04+)
 
 The recommended way to deploy the service is on a dedicated Linux server or LXC container.
+A **minimal** Debian installation is enough: `install.sh` installs every package the
+service needs itself. Only `git` is a prerequisite, because the checkout comes from it.
 
-### 1. Install Dependencies:
+### 1. Get the repository
+
 ```bash
-    sudo apt update
-    sudo apt install -y git python3 python3-venv python3-pip
+sudo apt update
+sudo apt install -y git
+sudo git clone https://github.com/wolsca/Wols_CA_PrintService /usr/local/src/wolsca-print-service
+cd /usr/local/src/wolsca-print-service
 ```
 
-2.  **Install Virtual Printer**:
+Keep the clone at `/usr/local/src/wolsca-print-service`: that is the default
+`update.source_directory`, so the *Install update* button in Home Assistant and the
+web app can fetch a release from it later.
+
+### 2. Run the installer
+
 ```bash
-    - **Linux**: `sudo python3 main.py --install-printer`
-    - **Windows**: Run the script with Administrative privileges: `python main.py --install-printer`. This downloads and configures PDFCreator.
+sudo ./deploy/debian/install.sh --with-cups
 ```
 
-3.  **Run Service**:
+Use `--with-cups` for the hybrid architecture (CUPS intake queues + `cups-pdf` +
+the Python service). Without it the service runs in native IPP mode.
+
+To upgrade an existing installation later, pull and run the same command again:
+
 ```bash
-    python3 main.py
+cd /usr/local/src/wolsca-print-service
+sudo git pull
+sudo ./deploy/debian/install.sh --with-cups
+```
+
+### 3. Verify
+
+```bash
+lpstat -p                                   # the intake queues and WolsCA_Output
+sudo systemctl status wolsca-print-service
+sudo /opt/wolsca-print-service/venv/bin/python /opt/wolsca-print-service/main.py --self-test
 ```
 
 The installer performs the following:
@@ -53,19 +77,27 @@ The installer performs the following:
 
 If you prefer to run the service from source or on Windows:
 
-1.  **Prepare Environment**:
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/wolsca/Wols_CA_PrintService
+    cd Wols_CA_PrintService
+    ```
+2.  **Prepare Environment**:
     ```bash
     python3 -m venv venv
     source venv/bin/activate  # venv\Scripts\activate on Windows
     pip install -r requirements.txt
     ```
-2.  **Install Virtual Printer**:
-    - **Linux**: `sudo python3 Wols_CA_PrintService.py --install-printer`
-    - **Windows**: Run the script with Administrative privileges: `python Wols_CA_PrintService.py --install-printer`. This downloads and configures PDFCreator.
-3.  **Run Service**:
+3.  **Install Virtual Printer**:
+    - **Linux**: `sudo python3 Wols_CA_PrintService/main.py --install-printer`
+    - **Windows**: Run the script with Administrative privileges: `python Wols_CA_PrintService\main.py --install-printer`. This downloads and configures PDFCreator.
+4.  **Run Service**:
     ```bash
-    python3 Wols_CA_PrintService.py
+    python3 Wols_CA_PrintService/main.py
     ```
+
+---
+
 ## Project Layout
 ```text
 Wols_CA_PrintService/
@@ -75,6 +107,7 @@ Wols_CA_PrintService/
     pdf_processor.py            Booklet imposition and PDF handling
     hardware_dispatcher.py      Raw TCP and CUPS dispatch
     file_watcher.py             Directory monitoring
+    notifier.py                 Push notifications to the phone (ntfy)
     web_app.py                  Mobile interface hosting
     diagnostics.py              Self-test phases, command logging and MQTT report
     admin.py                    Administrator configuration editor (web app and HA)
@@ -82,6 +115,8 @@ Wols_CA_PrintService/
     version.py                  Reads VERSION and BUILD_NUMBER
     web_strings.json            UI translations
     WolsCAPrintService.json     Runtime configuration (development)
+```
+
 ---
 
 ## Choose Mode in the Print Dialog
@@ -91,8 +126,12 @@ Instead of one intake queue, there are three shared CUPS queues. The queue a doc
 | Queue (visible printer) | Drop directory | Print mode | Result |
 | :--- | :--- | :--- | :--- |
 | **WolsCA_Booklet** | `.../PrintFileDrop/booklet` | Booklet | A5 booklet imposition on A4, flip halfway |
-| **WolsCA_DoubleSided** | `.../PrintFileDrop/duplex` | Duplex | Forced double sided, no imposition |
-| **WolsCA_SingleSided** | `.../PrintFileDrop/simplex` | Simplex | Forced single sided, one page per sheet |
+| **WolsCA_DoubleSided** | `.../PrintFileDrop/duplex` | DoubleSided | Forced double sided, no imposition |
+| **WolsCA_SingleSided** | `.../PrintFileDrop/simplex` | SingleSided | Forced single sided, one page per sheet |
+
+The mode values are `Booklet`, `DoubleSided` and `SingleSided`. The older names
+`Duplex` and `Simplex` are still accepted and are converted automatically when
+the configuration is read, so an existing installation keeps working.
 
 ---
 
@@ -109,13 +148,18 @@ sudo systemctl restart wolsca-print-service
 | Section | Key | Description |
 | :--- | :--- | :--- |
 | **mqtt** | `broker_ip` | IP address of your MQTT broker. |
-| | `topic_prefix` | Base topic for MQTT messages (default: `wolsca/printer`). |
+| | `topic_prefix` | Base topic for MQTT messages (default: `wols_ca/print_service`). |
+| | `user` | Broker account (default: `wolsca_mqtt`). This is a **broker** account, not a system user. |
+| | `password` | **Change this**: password of that broker account. |
 | | `instance_id` | Label of this installation, empty by default. Non-empty makes every entity, device and discovery node its own, so several installations can share one broker. The Home Assistant add-on sets it to `HA` itself and prefixes the topic with `HA_`. |
 | **paths** | `drop_directory` | Folder watched for new PDF files. |
 | **intake** | `enabled` | Enable triple-queue intake (default: `true`). |
 | | `queues` | Array of intake queues: `[{id, cups_queue, description, print_mode, directory}]`. |
 | **hardware** | `printer_uri` | URI of the physical printer (e.g. `ipps://192.168.1.10:443/ipp/print`). The installer creates the output queue from it. |
 | | `cups_queue_name` | Name of the CUPS output queue for the physical printer (default: `WolsCA_Output`). |
+| | `flip_confirmation` | Who confirms the flip: `auto` (printer panel when the printer supports it, default), `printer` or `service`. |
+| | `single_page_paper_change` | Paper change for a **single page** in DoubleSided mode: `off` (default), `printer` (send it to the manual feed slot, so the printer asks on its own panel and prints nothing until OK - no waste), `pause` (ask in the web app / Home Assistant first) or `blank` (print a blank front, so the printer asks and the page lands on the back of that sheet). |
+| | `single_page_media_source` | Tray used by `single_page_paper_change: printer` (default: `manual`). |
 | | `flip_instruction` | Global override for the paper flip instruction text. |
 | | `flip_timeout_seconds` | Auto-cancel job if no flip confirmation (default: `1800`, 0 to disable). |
 | **printers** | `default` | ID of the system-wide default printer. |
@@ -126,9 +170,9 @@ sudo systemctl restart wolsca-print-service
 | | `language` | UI language: `en` (English) or `nl` (Dutch). |
 | | `public_url` | External URL for notification actions (e.g. `http://print.local:8080`). |
 | | `admin_token` | Token required for `POST /api/default` and for the *Administrator* configuration editor. Empty means the editor stays locked. |
-| **notify** | `enabled` | Enable push notifications (default: `false`). |
+| **notify** | `enabled` | Enable push notifications (default: `true`). |
 | | `url` | ntfy/Gotify server URL (default: `https://ntfy.sh`). |
-| | `topic` | Secret topic name for notifications. |
+| | `topic` | Secret topic name. Left empty, the service generates a unique one (`wolsca_print_service_<random>`) at first use and writes it back into the configuration. |
 | | `token` | Optional auth token for the notification server. |
 | | `priority` | Notification priority (e.g., `high`). |
 | | `notify_on_error` | Send notification on job failure (default: `true`). |
@@ -144,8 +188,75 @@ sudo systemctl restart wolsca-print-service
 | | `auto_update` | Install a new **release** automatically (default: `false`). Never installs a test build. Toggled by the HA switch and the web app. |
 | | `source_directory` | Git checkout used for the update (default: `/usr/local/src/wolsca-print-service`). |
 | | `update_command` | Optional single command that replaces the default `git fetch/reset` + `install.sh`. |
-| **settings** | `print_mode` | `Bypass`, `Standard`, `Simplex`, `Duplex`, or `Booklet`. |
-| | `password` | **Change this**: Password for the MQTT broker. |
+| **settings** | `print_mode` | `Booklet`, `DoubleSided` or `SingleSided` (default: `DoubleSided`). |
+
+Up to and including version 1.4 the MQTT credentials lived in `settings.user` /
+`settings.password`. They now belong in the `mqtt` section, next to the broker
+address. A configuration that still has them under `settings` keeps working: the
+service falls back to that location when `mqtt.user` is empty.
+
+### MQTT broker accounts
+
+`mqtt.user` / `mqtt.password` is an account **on the broker**, not a Linux user.
+The default name is `wolsca_mqtt`. Which accounts you have to create depends on
+where the service runs:
+
+| Where the service runs | Broker | Accounts to create |
+| :--- | :--- | :--- |
+| Home Assistant add-on **and** Debian server on one broker | Mosquitto add-on in Home Assistant | Both: `wolsca_mqtt` for the Debian service and `wolsca_mqtt_ha` for the add-on |
+| Debian server only | Mosquitto add-on in Home Assistant, or EMQX on the server itself | Only `wolsca_mqtt` |
+| Home Assistant add-on only | Mosquitto add-on | None - leave `mqtt_user` empty and the Supervisor hands out its own account |
+
+Creating the account in the Mosquitto add-on (Home Assistant): *Settings →
+People → Add person*, switch on *Allow login*, no dashboard access; Mosquitto
+accepts Home Assistant users as broker accounts. With EMQX or a plain Mosquitto
+on the server:
+
+```bash
+sudo mosquitto_passwd /etc/mosquitto/passwd wolsca_mqtt
+sudo systemctl reload mosquitto
+```
+
+Both instances must be able to publish and subscribe on their own topic tree
+(`wols_ca/print_service/#`, the add-on `HA_wols_ca/print_service/#`) and on
+`homeassistant/#` for the discovery messages.
+
+Give each instance its own account when they share a broker: the logs and the
+ACLs then show which installation did what.
+
+### Push notifications on your phone
+
+Notifications are on by default and use [ntfy](https://ntfy.sh/), which needs no
+account:
+
+1. Install the **ntfy** app (Android: Play Store or F-Droid, iOS: App Store).
+2. Start the service once and read the generated topic from the log
+   (`journalctl -u wolsca-print-service | grep Notify`) or from
+   `notify.topic` in `/etc/wolsca/WolsCAPrintService.json`. It looks like
+   `wolsca_print_service_1a2b3c4d`.
+3. In the app: *Subscribe to topic* and enter exactly that name (server
+   `https://ntfy.sh`). Opening `https://ntfy.sh/<topic>` in a browser works too.
+4. Send a test message:
+
+   ```bash
+   sudo /opt/wolsca-print-service/venv/bin/python \
+        /opt/wolsca-print-service/main.py --self-test notify
+   ```
+
+   The `notify` phase is part of the default self-test as well, so the *Run
+   self-test* button in the web app and in Home Assistant also delivers one.
+
+You get a message when the front side is printed and the paper has to be
+flipped (tapping it opens the web app, so you can confirm from your phone), when
+a job fails and when a document is finished.
+
+The topic name is the only secret: anybody who knows it can read your
+notifications on the public server, which is why the service generates a random
+one instead of using a guessable name. Set `notify.topic` yourself if you prefer
+your own, run your own ntfy server through `notify.url`, or use
+`notify.token` for a server that requires authentication. Set
+`web.public_url` so the *flip the paper* notification can link straight to the
+web app.
 
 ---
 
@@ -203,13 +314,14 @@ service log and to MQTT, and the whole run is aggregated into one report.
 | Phase | What it checks |
 | :--- | :--- |
 | `system` | `uname -a`, `/etc/os-release`, `systemctl is-active` for the service, CUPS and Avahi, `df -h /var/spool`, `id -a`. |
-| `config` | Config file, drop/temp/error directories and their permissions, `ls -laR` of the drop folder, the resolved printer target and the intake queues. |
+| `config` | Config file, drop/temp/error directories and their permissions, `ls -laR` of the drop folder, the resolved printer target, the intake queues, whether the MQTT broker account is filled in and whether the default print mode is a known one. |
 | `cups` | `lpstat -t/-d/-o`, the sharing directives in `cupsd.conf`, all `cups-pdf*.conf` output paths, `cups-pdf_log`, `error_log`, and whether every configured queue really exists. |
 | `permissions` | Owner, group and mode of the configuration directory and file, of every spool/intake directory from the live configuration and of the history file, and whether the running process can really read and write them. Names `fix-permissions.sh` as the remedy. |
 | `admin` | Whether `web.admin_token` is set (the configuration editor stays locked without it), the current value of every editable setting, whether a restart is still pending and whether the configuration file is writable. |
 | `update` | The version files (`VERSION`, `BUILD_NUMBER`, commit hash), the `update` configuration, that the channel is release-only, whether GitHub can be reached, whether a newer **release** exists and whether the source checkout needed for the update button is present. |
 | `printer` | Ping of the printer, `ipptool get-printer-attributes` against `hardware.printer_uri`, `lpstat -v` and the details of the output queue. |
 | `network` | TCP reachability of the MQTT broker, MQTT connection state, the web app port, `avahi-browse -rt _ipp._tcp`, `ss -ltnp`. |
+| `notify` | The notification server, the topic (generating it when still empty) and a **real** test message to the phone. |
 | `chain` | End to end: submits a real job with `lp`, then waits up to 40 s for `cups-pdf` to drop a PDF in the watched folder, plus `lpstat -W completed -o` and the last service log lines. Not part of the default run because it prints. |
 
 Each step gets a status: `PASS`, `FAIL`, `WARN` (optional check), `SKIP` (tool not installed) or `INFO`.

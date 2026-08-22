@@ -19,7 +19,9 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.debian
     image: wolsca-print-service:test
-    container_name: wolsca-print-test
+    # The Debian container of the service is always called 'wolsca', on Docker
+    # Desktop as well as on the Home Assistant host.
+    container_name: wolsca
     ports:
       - "8080:8080"
       - "6631:631"

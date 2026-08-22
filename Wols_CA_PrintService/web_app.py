@@ -31,6 +31,15 @@ def web_language():
     language = str(config.get_config().get("web", {}).get("language", "en")).lower()[:2]
     return language if language in WEB_STRINGS else "en"
 
+def public_url():
+    """External address of the web app, used as the link in a notification."""
+    url = str(config.get_config().get("web", {}).get("public_url") or "").strip()
+    if not url:
+        return ""
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
+    return url.rstrip("/")
+
 def printer_targets():
     """Builds the list of available target printers."""
     c = config.get_config()
@@ -76,7 +85,8 @@ def resolve_job_options():
         copies, print_mode = None, None
     return {
         "copies": copies or 1,
-        "print_mode": print_mode or config.get_config()["settings"]["print_mode"]
+        "print_mode": config.normalize_print_mode(
+            print_mode or config.get_config()["settings"]["print_mode"])
     }
 
 def consume_pending_options():
@@ -217,11 +227,17 @@ function render(s) {
   byId("file").textContent = s.filename || "-";
   byId("pages").textContent = s.pages ? s.pages + " p / " + s.sheets + " s" : "-";
   byId("printer").textContent = s.effective_printer_name || "-";
+  // Exactly one place confirms the flip: when the printer asks on its own
+  // panel, the buttons here are taken away instead of competing with it.
+  var printerFlip = s.flip_owner === "printer";
+  byId("resume").hidden = printerFlip;
   byId("resume").disabled = !s.waiting_for_flip;
   byId("flipCard").hidden = !(s.waiting_for_flip || s.busy);
-  byId("reprint").hidden = !s.waiting_for_flip;
+  byId("reprint").hidden = printerFlip || !s.waiting_for_flip;
   byId("cancel").hidden = !s.busy;
-  byId("flipHelp").textContent = s.waiting_for_flip ? (s.flip_instruction || "") : "";
+  byId("flipHelp").textContent = printerFlip
+      ? (s.waiting_for_flip ? (T.flipOnPrinter || "Put the sheets back in the tray and press the button on the printer.") : (T.flipByPrinter || "This printer asks for the flip on its own display."))
+      : (s.waiting_for_flip ? (s.flip_instruction || "") : "");
 }
 
 function poll() {
@@ -494,6 +510,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 "pages": snapshot["pages"],
                 "sheets": snapshot["sheets"],
                 "waiting_for_flip": snapshot["waiting_for_flip"],
+                "flip_owner": snapshot["flip_owner"],
                 "busy": snapshot["state"] in ("PROCESSING", "PRINTING", "WAITING_FOR_FLIP"),
                 "effective_printer_name": snapshot["printer_name"] or eff_target["name"],
                 "flip_instruction": snapshot["flip_instruction"]
@@ -535,7 +552,11 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/api/resume":
-            if mqtt_service.waiting_for_user_action:
+            with mqtt_service.state_lock:
+                owner = mqtt_service.job_state["flip_owner"]
+            if owner == "printer":
+                print("[Web] 'CONTINUE' ignored: the flip is confirmed on the printer itself.")
+            elif mqtt_service.waiting_for_user_action:
                 print("[Web] 'CONTINUE' pressed in the web app.")
                 mqtt_service.waiting_for_user_action = False
         elif path == "/api/cancel":

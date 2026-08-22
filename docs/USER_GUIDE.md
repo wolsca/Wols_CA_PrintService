@@ -45,7 +45,7 @@ The service includes a mobile-friendly web app to track status and manage jobs.
     - **Continue**: Press after re-inserting paper.
     - **Reprint Front**: Prints the front side again if the first attempt failed (e.g. paper jam).
     - **Cancel**: Aborts the current job and clears the queue.
-*   **Job Options**: You can pick the **Printer**, **Print Mode** (Booklet / Double sided / Single sided / Standard / Bypass), and number of **Copies** (1-10) for your next job. These choices last for 15 minutes. The print mode here is only used for files copied into the shared drop folder - a job sent to one of the three network printers always uses that printer's mode.
+*   **Job Options**: You can pick the **Printer**, **Print Mode** (Booklet / DoubleSided / SingleSided / Standard / Bypass), and number of **Copies** (1-10) for your next job. These choices last for 15 minutes. The print mode here is only used for files copied into the shared drop folder - a job sent to one of the three network printers always uses that printer's mode.
 *   **Job History**: A list of recently completed jobs is shown at the bottom.
 
 ### Add to Home Screen (PWA)
@@ -60,10 +60,12 @@ For quick access, you can install the web app as an app:
 
 You can receive a notification on your phone when the printer is waiting for you.
 
+Messages are sent when the front side is printed and the paper must be flipped (with a click link to the web app, taken from `web.public_url`), when a job fails and when a document is finished.
+
 ### Setup on iPhone and Android
 1.  Install the free **ntfy** app from the App Store or Google Play Store.
 2.  Open the app and tap **Subscribe to topic**.
-3.  Enter the topic name provided by your administrator (pick a hard-to-guess name like `my-private-print-ping-88`).
+3.  Enter the topic name provided by your administrator. If they left it empty, the service generated a unique topic like `wolsca_print_service_a1b2c3d4` at first use; subscribe to exactly that topic (found in the configuration or the web app).
 4.  Ensure notifications are allowed.
 5.  When the phone buzzes, you can tap the **Continue printing** button directly in the notification after you've flipped the paper.
 
@@ -122,8 +124,8 @@ The drop folder has one sub-folder per mode, so you can pick the mode by choosin
 | Sub-folder | Mode |
 | :--- | :--- |
 | `booklet` | A5 booklet |
-| `duplex` | Double sided |
-| `simplex` | Single sided |
+| `duplex` | DoubleSided |
+| `simplex` | SingleSided |
 
 A file copied into the top level of the drop folder uses the mode selected in the web app, or the administrator default.
 
@@ -135,7 +137,7 @@ A file copied into the top level of the drop folder uses the mode selected in th
 | :--- | :--- |
 | **Web app not reachable** | Ensure you are on the same network. Try using the server's IP address instead of `.local` name. |
 | **Printer not discovered** | Ensure the server and device are on the same subnet. Check if mDNS/Avahi is running on the server. |
-| **No notification arrives** | Check if the `ntfy` app is subscribed to the correct topic. Ensure the service has `notify.enabled` set to true. |
+| **No notification arrives** | Check if the `ntfy` app is subscribed to the correct topic. Notifications are ENABLED by default; ensure `notify.enabled` has not been set to false. |
 | **Progress bar stays at 0%** | Real-time progress requires a CUPS-dispatched printer. Raw port 9100 transfers only show the active sheet. |
 | **Job stuck "Waiting for flip"** | Open the web app and press the **CONTINUE** button. Ensure you have re-inserted the paper correctly. |
 | **Job cancelled itself** | Jobs are automatically cancelled after 30 minutes of waiting to prevent blocking the queue. |

@@ -6,8 +6,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=wolsca
-Group=lp
+# The service configures CUPS queues, writes /etc/wolsca and manages spool
+# directories, so it runs as root. 'lp' is added as a supplementary group so
+# everything cups-pdf drops stays readable and removable.
+# install.sh rewrites User=/Group= when it installs with another service user.
+User=root
+Group=root
+SupplementaryGroups=lp
 Environment=PYTHONUNBUFFERED=1
 Environment=WOLSCA_CONFIG=/etc/wolsca/WolsCAPrintService.json
 WorkingDirectory=/opt/wolsca-print-service

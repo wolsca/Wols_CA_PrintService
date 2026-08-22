@@ -10,6 +10,8 @@ import mqtt_service
 import hardware_dispatcher
 import pdf_processor
 import file_watcher
+import notifier
+import printer_capabilities
 import web_app
 import installer
 import diagnostics
@@ -60,11 +62,14 @@ def rescan_worker():
         for directory, q_entry in intake_directories():
             file_watcher.scan_directory(directory, enqueue_print_job, q_entry)
 
-def wait_for_flip(filename, sheets, instruction):
+def wait_for_flip(filename, sheets, instruction, prompt=None):
     mqtt_service.waiting_for_user_action = True
     mqtt_service.set_state("WAITING_FOR_FLIP",
-                           f"Front side done. Put the {sheets} sheet(s) back in the tray and press Continue.",
+                           prompt or f"Front side done. Put the {sheets} sheet(s) back in the tray and press Continue.",
                            side="front", flip_instruction=instruction)
+    # The user is standing at the printer, not at the web app: a push message on
+    # the phone is what makes the manual flip workable.
+    notifier.notify_flip(filename, web_app.public_url())
 
     while mqtt_service.waiting_for_user_action and not shutdown_event.is_set():
         time.sleep(0.5)
@@ -96,13 +101,20 @@ def process_print_job(filepath, intake=None):
 
     copies = options["copies"]
     print_mode = intake["print_mode"] if intake and "print_mode" in intake else options["print_mode"]
+    print_mode = config.normalize_print_mode(print_mode)
     instruction = target.get("flip_instruction") or config.get_config()["hardware"].get("flip_instruction", "")
     duplex = bool(target.get("duplex")) and target.get("dispatch") == "cups"
+
+    # When the printer can ask for the flip on its own panel, it owns the whole
+    # job: no Continue button in the web app or in Home Assistant (see
+    # printer_capabilities.flip_owner).
+    printer_flip = not duplex and printer_capabilities.flip_owner(target) == "printer"
+    mqtt_service.set_flip_owner("printer" if printer_flip else "service")
 
     mqtt_service.set_state("PROCESSING", f"Analyzing {filename}", filename=filename,
                            copies=copies, print_mode=print_mode, printer_id=target["id"])
 
-    front_pdf = back_pdf = duplex_pdf = None
+    front_pdf = back_pdf = duplex_pdf = blank_pdf = None
 
     try:
         pages = pdf_processor.validate_pdf(filepath)
@@ -110,21 +122,57 @@ def process_print_job(filepath, intake=None):
         if print_mode == "Booklet":
             front_pdf, back_pdf, pages = pdf_processor.generate_booklet_pdfs(filepath)
             sheets = ((pages + 3) // 4)
-            if duplex:
+            if duplex or printer_flip:
                 duplex_pdf = pdf_processor.generate_duplex_booklet_pdf(front_pdf, back_pdf, filename)
-                hardware_dispatcher.dispatch_to_printer_ipp(duplex_pdf, "Booklet-Duplex", target, side="both", copies=copies, duplex=True, total_sheets=sheets * 2, shutdown_event=shutdown_event)
+                hardware_dispatcher.dispatch_to_printer_ipp(duplex_pdf, "Booklet-Duplex", target, side="both", copies=copies, duplex=duplex, total_sheets=sheets * 2, sides="two-sided-short-edge" if printer_flip else None, shutdown_event=shutdown_event, manual_duplex_sheets=sheets if printer_flip else 0)
             else:
                 while True:
                     hardware_dispatcher.dispatch_to_printer_ipp(front_pdf, "Booklet-Front", target, side="front", copies=copies, total_sheets=sheets, shutdown_event=shutdown_event)
                     if wait_for_flip(filename, sheets, instruction) == "resume": break
                 hardware_dispatcher.dispatch_to_printer_ipp(back_pdf, "Booklet-Back", target, side="back", copies=copies, total_sheets=sheets, shutdown_event=shutdown_event)
 
-        elif print_mode == "Duplex":
+        elif print_mode == "DoubleSided":
             sheets = (pages + 1) // 2
-            if duplex or pages < 2:
+
+            # A single page can be given a paper change of its own, so special
+            # paper can be loaded for exactly this page without another job
+            # using it (hardware.single_page_paper_change):
+            #   printer - send it to the manual feed slot, so the printer asks
+            #             on its own panel and prints nothing until OK, no waste
+            #   pause   - ask in the web app / Home Assistant first, no waste
+            #   blank   - print a blank front, so the printer asks on its panel
+            #             and the page ends up on the back of that sheet
+            paper_change = "off"
+            if pages == 1:
+                paper_change = str(config.get_config()["hardware"].get(
+                    "single_page_paper_change", "off") or "off").strip().lower()
+
+            if paper_change == "printer":
+                uri = config.get_config()["hardware"].get("printer_uri", "")
+                mqtt_service.set_flip_owner("printer")
+                hardware_dispatcher.dispatch_via_ipp_manual_tray(
+                    filepath, uri, copies,
+                    config.get_config()["hardware"].get("single_page_media_source") or "manual",
+                    "back", shutdown_event)
+            elif paper_change == "pause":
+                mqtt_service.set_flip_owner("service")
+                wait_for_flip(filename, 1, instruction,
+                              prompt="Put the paper for this page in the tray and press Continue.")
+                hardware_dispatcher.dispatch_to_printer_ipp(filepath, "DoubleSided-SinglePage", target, side="back", copies=copies, total_sheets=1, sides="one-sided", shutdown_event=shutdown_event)
+            elif paper_change == "blank":
+                blank_pdf = pdf_processor.generate_blank_front_pdf(filepath)
+                if printer_flip:
+                    hardware_dispatcher.dispatch_to_printer_ipp(blank_pdf, "DoubleSided-BlankFront", target, side="both", copies=copies, total_sheets=1, sides="two-sided-long-edge", shutdown_event=shutdown_event, manual_duplex_sheets=1)
+                else:
+                    front_pdf, back_pdf, _ = pdf_processor.generate_two_sided_pdfs(blank_pdf)
+                    while True:
+                        hardware_dispatcher.dispatch_to_printer_ipp(front_pdf, "DoubleSided-BlankFront", target, side="front", copies=copies, total_sheets=1, sides="one-sided", shutdown_event=shutdown_event)
+                        if wait_for_flip(filename, 1, instruction) == "resume": break
+                    hardware_dispatcher.dispatch_to_printer_ipp(back_pdf, "DoubleSided-Back", target, side="back", copies=copies, total_sheets=1, sides="one-sided", shutdown_event=shutdown_event)
+            elif duplex or printer_flip or pages < 2:
                 # Bugfix: Bypass mechanical hardware flip for single-page documents
-                actual_sides = "two-sided-long-edge" if (duplex and pages > 1) else "one-sided"
-                hardware_dispatcher.dispatch_to_printer_ipp(filepath, "Duplex", target, side="both", copies=copies, duplex=duplex, total_sheets=pages, sides=actual_sides, shutdown_event=shutdown_event)
+                actual_sides = "two-sided-long-edge" if ((duplex or printer_flip) and pages > 1) else "one-sided"
+                hardware_dispatcher.dispatch_to_printer_ipp(filepath, "DoubleSided", target, side="both", copies=copies, duplex=duplex, total_sheets=pages, sides=actual_sides, shutdown_event=shutdown_event, manual_duplex_sheets=sheets if (printer_flip and pages > 1) else 0)
             else:
                 front_pdf, back_pdf, pages = pdf_processor.generate_two_sided_pdfs(filepath)
                 while True:
@@ -132,12 +180,13 @@ def process_print_job(filepath, intake=None):
                     if wait_for_flip(filename, sheets, instruction) == "resume": break
                 hardware_dispatcher.dispatch_to_printer_ipp(back_pdf, "Duplex-Back", target, side="back", copies=copies, total_sheets=sheets, sides="one-sided", shutdown_event=shutdown_event)
 
-        elif print_mode == "Simplex":
-            hardware_dispatcher.dispatch_to_printer_ipp(filepath, "Simplex", target, copies=copies, total_sheets=pages, sides="one-sided", shutdown_event=shutdown_event)
+        elif print_mode == "SingleSided":
+            hardware_dispatcher.dispatch_to_printer_ipp(filepath, "SingleSided", target, copies=copies, total_sheets=pages, sides="one-sided", shutdown_event=shutdown_event)
         else:
             hardware_dispatcher.dispatch_to_printer_ipp(filepath, print_mode, target, copies=copies, total_sheets=pages, shutdown_event=shutdown_event)
 
         mqtt_service.set_state("COMPLETED", f"Processed {filename}", side=None)
+        notifier.notify_completed(filename, pages)
         if os.path.exists(filepath): os.remove(filepath)
 
     except hardware_dispatcher.JobCancelled as jc:
@@ -145,9 +194,11 @@ def process_print_job(filepath, intake=None):
         remove_quietly(filepath)
     except Exception as e:
         mqtt_service.set_state("ERROR", str(e), side=None)
+        notifier.notify_error(str(e), filename)
 
     finally:
-        remove_quietly(front_pdf, back_pdf, duplex_pdf)
+        remove_quietly(front_pdf, back_pdf, duplex_pdf, blank_pdf)
+        mqtt_service.set_flip_owner("service")
         mqtt_service.waiting_for_user_action = False
         mqtt_service.reset_job_control()
         with queue_lock:
@@ -201,6 +252,13 @@ def start_service():
         observer.schedule(file_watcher.PrintFolderWatcher(shutdown_event, enqueue_print_job, q_entry), directory, recursive=True)
 
     observer.start()
+
+    # Being ready does not depend on the broker: the state used to be announced
+    # only from the MQTT on_connect callback, so a refused login left the service
+    # in STARTING forever even though printing worked.
+    if mqtt_service.job_state.get("state") == "STARTING":
+        mqtt_service.set_state("IDLE", "Waiting for the next print job", side=None)
+
     threading.Thread(target=rescan_worker, daemon=True).start()
     updater.start_watcher(shutdown_event)
     shutdown_event.wait()

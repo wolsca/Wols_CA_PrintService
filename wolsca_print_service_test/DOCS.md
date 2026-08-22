@@ -10,7 +10,7 @@ setup - they are identical.
 Two things to keep in mind when both are installed:
 
 - Its `instance_id` is `HAtest`, so the MQTT topic becomes
-  `HAtest_wols_ca/printer_test` and every entity, device and discovery node is
+  `HAtest_wols_ca/print_service_test` and every entity, device and discovery node is
   its own. Leave it as it is, otherwise this instance takes over the entities of
   the release add-on.
 - It has its own `web_port` (default `8081`), but stop the release add-on while

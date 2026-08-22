@@ -2,8 +2,10 @@
     "mqtt": {
         "broker_ip": "192.168.101.240",
         "broker_port": 1883,
-        "topic_prefix": "wolsca/printer",
-        "discovery_prefix": "homeassistant"
+        "topic_prefix": "wols_ca/print_service",
+        "discovery_prefix": "homeassistant",
+        "user": "wolsca_mqtt",
+        "password": "DefaultPassword"
     },
     "paths": {
         "drop_directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop",
@@ -29,14 +31,14 @@
                 "id": "duplex",
                 "cups_queue": "WolsCA_DoubleSided",
                 "description": "Double sided (front and back)",
-                "print_mode": "Duplex",
+                "print_mode": "DoubleSided",
                 "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\duplex"
             },
             {
                 "id": "simplex",
                 "cups_queue": "WolsCA_SingleSided",
                 "description": "Single sided (one page per sheet)",
-                "print_mode": "Simplex",
+                "print_mode": "SingleSided",
                 "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\simplex"
             }
         ]
@@ -68,7 +70,7 @@
         "admin_token": ""
     },
     "notify": {
-        "enabled": false,
+        "enabled": true,
         "url": "https://ntfy.sh",
         "topic": "",
         "token": "",
@@ -88,8 +90,6 @@
         "cups_share_on_network": true
     },
     "settings": {
-        "user": "WolsCADoublePrint",
-        "password": "DefaultPassword",
-        "print_mode": "Booklet"
+        "print_mode": "DoubleSided"
     }
 }

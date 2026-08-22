@@ -12,6 +12,8 @@
     "continueButton": "Paper re-inserted - CONTINUE",
     "reprintButton": "Print the front side again",
     "cancelButton": "Cancel this print job",
+    "flipOnPrinter": "Put the sheets back in the tray and press the button on the printer.",
+    "flipByPrinter": "This printer asks for the flip on its own display, so there is no button here.",
     "applyButton": "Use these settings",
     "confirmCancel": "Cancel the current print job?",
     "oneCopy": "1 copy",
@@ -64,8 +66,8 @@
     "off": "off",
     "modes": {
       "Booklet": "Booklet (A5, fold in the middle)",
-      "Duplex": "Double sided (front and back)",
-      "Simplex": "Single sided (one page per sheet)",
+      "DoubleSided": "Double sided (front and back)",
+      "SingleSided": "Single sided (one page per sheet)",
       "Standard": "Standard (one side per sheet)",
       "Bypass": "Bypass (send as it is)"
     },

@@ -25,6 +25,36 @@ def resolve_config_path():
 
 CONFIG_PATH = resolve_config_path()
 
+# Print modes are named after what comes out of the printer. 'Duplex' and
+# 'Simplex' were the values up to and including version 1.4, so they are still
+# accepted and translated whenever a mode is read.
+PRINT_MODES = ("Booklet", "DoubleSided", "SingleSided")
+PRINT_MODE_ALIASES = {
+    "booklet": "Booklet",
+    "duplex": "DoubleSided",
+    "double": "DoubleSided",
+    "doublesided": "DoubleSided",
+    "simplex": "SingleSided",
+    "single": "SingleSided",
+    "singlesided": "SingleSided",
+}
+
+def normalize_print_mode(value):
+    """Maps an old or differently cased mode name onto its current name."""
+    if not value:
+        return value
+    text = str(value).strip()
+    return PRINT_MODE_ALIASES.get(text.lower(), text)
+
+def normalize_print_modes():
+    """Rewrites the modes of a configuration written by an older version."""
+    settings = config_data.get("settings", {})
+    if settings.get("print_mode"):
+        settings["print_mode"] = normalize_print_mode(settings["print_mode"])
+    for q_entry in config_data.get("intake", {}).get("queues", []):
+        if q_entry.get("print_mode"):
+            q_entry["print_mode"] = normalize_print_mode(q_entry["print_mode"])
+
 def load_or_create_config():
     """Loads the JSON configuration or creates it with defaults if it does not exist."""
     global config_data
@@ -33,8 +63,12 @@ def load_or_create_config():
         "mqtt": {
             "broker_ip": "192.168.101.240",
             "broker_port": 1883,
-            "topic_prefix": "wolsca/printer",
+            "topic_prefix": "wols_ca/print_service",
             "discovery_prefix": "homeassistant",
+            # Broker account, not a system user. Create it on the broker itself
+            # (Mosquitto add-on in Home Assistant, or EMQX on the server).
+            "user": "wolsca_mqtt",
+            "password": "DefaultPassword",
             # Label of this instance. Empty is the classic single installation;
             # the Home Assistant add-on sets it to 'HA' at start-up, which keeps
             # its entities apart from a Debian installation on the same broker.
@@ -48,6 +82,18 @@ def load_or_create_config():
         "hardware": {
             "printer_uri": "ipps://192.168.101.251:443/ipp/print",
             "cups_queue_name": "WolsCA_Output",
+            # Who confirms the flip halfway through a job: 'auto' uses the
+            # button on the printer when it offers manual duplex (AirPrint /
+            # Mopria) and the Continue button of the service otherwise;
+            # 'printer' and 'service' force one of the two.
+            "flip_confirmation": "auto",
+            # A single page in DoubleSided mode. 'off' prints it straight away;
+            # 'printer' sends it to the manual feed slot, so the printer asks on
+            # its own panel and prints nothing until OK; 'pause' asks in the web
+            # app or Home Assistant first; 'blank' prints a blank front so the
+            # printer asks and the page lands on the back of that sheet.
+            "single_page_paper_change": "off",
+            "single_page_media_source": "manual",
             "flip_instruction": "",
             "flip_timeout_seconds": 1800
         },
@@ -65,14 +111,14 @@ def load_or_create_config():
                     "id": "duplex",
                     "cups_queue": "WolsCA_DoubleSided",
                     "description": "Double sided (two pages per sheet, front and back)",
-                    "print_mode": "Duplex",
+                    "print_mode": "DoubleSided",
                     "directory": ""
                 },
                 {
                     "id": "simplex",
                     "cups_queue": "WolsCA_SingleSided",
                     "description": "Single sided (one page per sheet)",
-                    "print_mode": "Simplex",
+                    "print_mode": "SingleSided",
                     "directory": ""
                 }
             ]
@@ -103,7 +149,10 @@ def load_or_create_config():
             "admin_token": ""
         },
         "notify": {
-            "enabled": False,
+            # On by default: without a push message on the phone the manual flip
+            # halfway through a job is easy to miss. An empty topic makes the
+            # service generate a unique one at first use (see notifier.py).
+            "enabled": True,
             "url": "https://ntfy.sh",
             "topic": "",
             "token": "",
@@ -134,9 +183,9 @@ def load_or_create_config():
             "update_command": ""
         },
         "settings": {
-            "user": "WolsCADoublePrint",
-            "password": "DefaultPassword",
-            "print_mode": "Booklet"
+            # The MQTT credentials moved to the 'mqtt' section; they are only
+            # read here for configurations written by an older version.
+            "print_mode": "DoubleSided"
         }
     }
 
@@ -154,6 +203,8 @@ def load_or_create_config():
                 for section in ("mqtt", "hardware", "web", "notify", "history", "printers", "intake", "update"):
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
+
+                normalize_print_modes()
         except Exception as e:
             print(f"[Error] Failed to read JSON config: {e}. Using defaults.")
             config_data = default_config
@@ -174,6 +225,19 @@ def save_config():
 
 def get_config():
     return config_data
+
+def get_mqtt_credentials():
+    """Returns the broker account as (user, password).
+
+    The credentials live in the 'mqtt' section. Configurations written by an
+    older version kept them in 'settings', so that location is still honoured
+    when the 'mqtt' section carries no value.
+    """
+    mqtt_section = config_data.get("mqtt", {})
+    settings_section = config_data.get("settings", {})
+    user = mqtt_section.get("user") or settings_section.get("user", "")
+    password = mqtt_section.get("password") or settings_section.get("password", "")
+    return user, password
 
 # Execute on import to ensure directories exist
 load_or_create_config()

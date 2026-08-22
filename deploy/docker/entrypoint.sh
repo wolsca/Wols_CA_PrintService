@@ -68,14 +68,16 @@ settings = data.setdefault("settings", {})
 hardware = data.setdefault("hardware", {})
 web = data.setdefault("web", {})
 update = data.setdefault("update", {})
+notify = data.setdefault("notify", {})
 
 # An empty string means "keep what is in the configuration file", so the add-on
 # options never wipe a working setting.
 mapping = [
     ("mqtt_broker", mqtt, "broker_ip"),
     ("mqtt_port", mqtt, "broker_port"),
-    ("mqtt_user", settings, "user"),
-    ("mqtt_password", settings, "password"),
+    # The broker account lives in the 'mqtt' section.
+    ("mqtt_user", mqtt, "user"),
+    ("mqtt_password", mqtt, "password"),
     ("mqtt_topic_prefix", mqtt, "topic_prefix"),
     ("mqtt_discovery_prefix", mqtt, "discovery_prefix"),
     ("printer_uri", hardware, "printer_uri"),
@@ -85,6 +87,8 @@ mapping = [
     ("web_title", web, "title"),
     ("web_language", web, "language"),
     ("admin_token", web, "admin_token"),
+    ("notify_url", notify, "url"),
+    ("notify_topic", notify, "topic"),
 ]
 applied = []
 for option, section, key in mapping:
@@ -100,10 +104,14 @@ for option, key in (("auto_update", "auto_update"),
         update[key] = bool(options[option])
         applied.append(key)
 
+if "notify_enabled" in options:
+    notify["enabled"] = bool(options["notify_enabled"])
+    applied.append("notify.enabled")
+
 # The Mosquitto add-on, only where the options left the field empty.
 for service_key, section, key, option in (("host", mqtt, "broker_ip", "mqtt_broker"),
-                                          ("username", settings, "user", "mqtt_user"),
-                                          ("password", settings, "password", "mqtt_password")):
+                                          ("username", mqtt, "user", "mqtt_user"),
+                                          ("password", mqtt, "password", "mqtt_password")):
     value = mqtt_service.get(service_key)
     option_value = options.get(option)
     if value in (None, ""):
@@ -121,7 +129,7 @@ instance = str(options.get("instance_id")
                or os.environ.get("WOLSCA_INSTANCE_ID")
                or "HA").strip()
 marker = f"{instance}_"
-prefix = str(mqtt.get("topic_prefix") or "wolsca/printer")
+prefix = str(mqtt.get("topic_prefix") or "wols_ca/print_service")
 if not prefix.startswith(marker):
     prefix = f"{marker}{prefix}"
 mqtt["topic_prefix"] = prefix
@@ -166,8 +174,8 @@ if os.environ.get("WOLSCA_VIRTUAL_OUTPUT") == "1":
 mapping = [
     ("WOLSCA_MQTT_BROKER", mqtt, "broker_ip"),
     ("WOLSCA_MQTT_PREFIX", mqtt, "topic_prefix"),
-    ("WOLSCA_MQTT_USER", settings, "user"),
-    ("WOLSCA_MQTT_PASSWORD", settings, "password"),
+    ("WOLSCA_MQTT_USER", mqtt, "user"),
+    ("WOLSCA_MQTT_PASSWORD", mqtt, "password"),
     ("WOLSCA_ADMIN_TOKEN", web, "admin_token"),
 ]
 applied = []

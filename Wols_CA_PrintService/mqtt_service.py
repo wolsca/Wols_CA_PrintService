@@ -31,8 +31,35 @@ job_state = {
     "flip_instruction": "",
     "flip_deadline": 0.0,
     "waiting_for_flip": False,
+    # Who confirms the flip: 'service' (Continue button in the web app and in
+    # Home Assistant) or 'printer' (the button on the printer itself). Exactly
+    # one of the two is offered, never both.
+    "flip_owner": "service",
     "updated": datetime.now().isoformat()
 }
+
+def set_flip_owner(owner):
+    """Hands the flip confirmation to the printer panel or back to the service.
+
+    The Continue button in Home Assistant is switched off through its
+    availability topic, so the two can never be pressed against each other.
+    """
+    with state_lock:
+        if job_state["flip_owner"] == owner:
+            return
+        job_state["flip_owner"] = owner
+    publish_resume_availability(owner)
+    print(f"[System] Flip confirmation is handled by the {owner}.")
+
+
+def publish_resume_availability(owner=None):
+    """Marks the Home Assistant Continue button (un)available."""
+    if owner is None:
+        with state_lock:
+            owner = job_state["flip_owner"]
+    mqtt_client.publish(f"{PREFIX}/availability/resume",
+                        "offline" if owner == "printer" else "online", retain=True)
+
 
 def request_cancel():
     """Flags the current job for cancellation."""
@@ -65,7 +92,7 @@ def reset_job_control():
 
 # --- MQTT Setup ---
 c = config.get_config()
-PREFIX = c["mqtt"].get("topic_prefix", "wols_ca/printer_servic")
+PREFIX = c["mqtt"].get("topic_prefix", "wols_ca/print_service")
 HA_PREFIX = c["mqtt"].get("discovery_prefix", "homeassistant")
 
 # Instance identity. Empty means the classic single installation, so its entity
@@ -133,9 +160,14 @@ def publish_ha_discovery():
         "payload_press": "RESUME",
         "icon": "mdi:page-next",
         "unique_id": uid("wolsca_print_resume"),
+        # Unavailable while the printer itself asks for the flip on its panel.
+        "availability_topic": f"{PREFIX}/availability/resume",
+        "payload_available": "online",
+        "payload_not_available": "offline",
         "device": DEVICE_INFO
     }
     mqtt_client.publish(f"{HA_PREFIX}/button/{NODE_ID}/resume/config", json.dumps(config_button), retain=True)
+    publish_resume_availability()
 
     config_cancel = {
         "name": entity_name("Cancel Print Job"),
@@ -187,6 +219,7 @@ def set_state(state, detail="", pending_count=0, **fields):
         "copies": snapshot["copies"],
         "print_mode": snapshot["print_mode"],
         "printer": snapshot["printer_name"],
+        "flip_owner": snapshot["flip_owner"],
         "queued": pending_count,
         "version": SERVICE_VERSION,
         "timestamp": snapshot["updated"]
@@ -227,7 +260,10 @@ def on_connect(client, userdata, flags, reason_code, properties):
         set_state("IDLE", "Service started and synchronized with HA.")
         publish_log("Service started and synchronized with Home Assistant.", "info")
     else:
-        print(f"[MQTT] Connection failed, return code {reason_code}")
+        mqtt_user, _ = config.get_mqtt_credentials()
+        print(f"[MQTT] Connection failed, return code {reason_code} "
+              f"(account '{mqtt_user}'; create it on the broker or correct "
+              f"mqtt.user/mqtt.password). Printing itself keeps working.")
 
 def on_message(client, userdata, msg):
     global waiting_for_user_action
@@ -241,7 +277,11 @@ def on_message(client, userdata, msg):
         return
 
     if topic == f"{PREFIX}/command" and payload == "RESUME":
-        if waiting_for_user_action:
+        with state_lock:
+            owner = job_state["flip_owner"]
+        if owner == "printer":
+            print("[System] 'RESUME' ignored: the flip is confirmed on the printer itself.")
+        elif waiting_for_user_action:
             print("[System] 'RESUME' command received via MQTT. Continuing workflow...")
             publish_log("Resume command received via MQTT. Continuing workflow.", "info")
             waiting_for_user_action = False
@@ -298,8 +338,7 @@ mqtt_client.on_message = on_message
 def start_mqtt():
     """Initializes and connects the MQTT client."""
     c = config.get_config()
-    mqtt_user = c["settings"]["user"]
-    mqtt_pass = c["settings"]["password"]
+    mqtt_user, mqtt_pass = config.get_mqtt_credentials()
     broker_ip = c["mqtt"]["broker_ip"]
     broker_port = c["mqtt"]["broker_port"]
 

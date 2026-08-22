@@ -44,17 +44,25 @@ options:
   instance_id: HA
   mqtt_broker: ""
   mqtt_port: 1883
+  # Leave empty to use the Mosquitto account the Supervisor hands out. Fill it
+  # in to use your own broker account, e.g. 'wolsca_mqtt_ha' next to the
+  # 'wolsca_mqtt' of a Debian installation on the same broker.
   mqtt_user: ""
   mqtt_password: ""
-  mqtt_topic_prefix: wols_ca/printer
+  mqtt_topic_prefix: wols_ca/print_service
   mqtt_discovery_prefix: homeassistant
   printer_uri: ipps://192.168.101.251:443/ipp/print
-  print_mode: Duplex
+  print_mode: DoubleSided
   flip_timeout_seconds: 1800
   web_port: 8080
   web_title: Wols CA Print Service
   web_language: en
   admin_token: ""
+  # Push notifications to your phone (ntfy). Leave the topic empty to have a
+  # unique one generated at first start; subscribe to it in the ntfy app.
+  notify_enabled: true
+  notify_url: https://ntfy.sh
+  notify_topic: ""
   auto_update: false
   allow_test_builds: false
 schema:
@@ -66,12 +74,15 @@ schema:
   mqtt_topic_prefix: str
   mqtt_discovery_prefix: str
   printer_uri: str
-  print_mode: list(Booklet|Duplex|Simplex)
+  print_mode: list(Booklet|DoubleSided|SingleSided)
   flip_timeout_seconds: int(30,86400)
   web_port: port
   web_title: str
   # Only 'en' is translated today; web_strings.json decides what is available.
   web_language: str
   admin_token: password?
+  notify_enabled: bool
+  notify_url: str
+  notify_topic: str?
   auto_update: bool
   allow_test_builds: bool

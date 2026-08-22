@@ -49,16 +49,106 @@ echo "==> 1/8 Installing OS packages and managing port 631"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 
+# A minimal Debian installation (netinst without any task selected) has none of
+# the tools the service, the installer and the self-test call out to. Everything
+# listed here is either imported, executed or needed to build the virtualenv, so
+# the lists below are the complete runtime dependency set.
+#
+#   ca-certificates  HTTPS to GitHub (update check) and to the printer over ipps
+#   curl / wget      update download and the Supervisor/ntfy calls
+#   (git itself is a prerequisite: this script comes from the checkout)
+#   iproute2         'ss -ltnp' in the network self-test phase
+#   iputils-ping     'ping' in the printer self-test phase
+#   procps / psmisc  process inspection, used while diagnosing a hung job
+#   systemd          journalctl for the log step and the service unit itself
+#   libnss-mdns      resolves <host>.local, so Windows/Android names work
+#   python3-dev,     build fallback for the pip wheels when no binary wheel
+#   build-essential  exists for the platform (arm64, unusual Python versions)
+BASE_PACKAGES=(
+    ca-certificates
+    curl
+    wget
+    python3
+    python3-venv
+    python3-pip
+    python3-setuptools
+    python3-dev
+    build-essential
+    avahi-daemon
+    avahi-utils
+    libnss-mdns
+    iproute2
+    iputils-ping
+    procps
+    psmisc
+    coreutils
+    findutils
+    grep
+    sed
+    tar
+    gzip
+    xz-utils
+    less
+    file
+    systemd
+    tzdata
+    locales
+)
+
+#   cups-client      lp, lpstat, lpadmin, cupsenable, cupsaccept, cupsctl
+#   cups-ipp-utils   ipptool, used by the dispatcher and the printer phase
+#   cups-filters     the PDF -> printer filter chain of the output queue
+#   ghostscript      needed by those filters for PDF/PostScript conversion
+#   poppler-utils    pdftoppm/pdfinfo, used while inspecting incoming jobs
+CUPS_PACKAGES=(
+    cups
+    cups-daemon
+    cups-client
+    cups-bsd
+    cups-filters
+    cups-ipp-utils
+    printer-driver-cups-pdf
+    ghostscript
+    poppler-utils
+)
+
+# Debian 13 renamed or dropped a few of these, so an unknown package must not
+# abort the whole installation: only what apt really knows is passed on.
+install_packages() {
+    local wanted=("$@")
+    local available=() missing=()
+    for pkg in "${wanted[@]}"; do
+        if apt-cache show "${pkg}" >/dev/null 2>&1; then
+            available+=("${pkg}")
+        else
+            missing+=("${pkg}")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "    Not offered by this distribution, skipped: ${missing[*]}"
+    fi
+    if [[ ${#available[@]} -gt 0 ]]; then
+        apt-get install -y --no-install-recommends "${available[@]}"
+    fi
+}
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "    [Warning] 'git' is not installed. It is a prerequisite of this checkout;"
+    echo "              without it the update buttons cannot fetch a release."
+fi
+
+echo "    Installing base dependencies (${#BASE_PACKAGES[@]} packages)..."
+install_packages "${BASE_PACKAGES[@]}"
+
 if [[ "${WITH_CUPS}" == "yes" ]]; then
-    echo "    [Hybrid Mode] Installing CUPS and dependencies..."
-    apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils cups printer-driver-cups-pdf cups-client cups-ipp-utils
+    echo "    [Hybrid Mode] Installing CUPS and the printing tool chain..."
+    install_packages "${CUPS_PACKAGES[@]}"
 
     # Ensure CUPS is running and shared to the network
     systemctl enable --now cups
     cupsctl --share-printers --remote-any || true
 else
-    echo "    [Native Mode] Installing base dependencies..."
-    apt-get install -y python3 python3-venv python3-pip avahi-daemon avahi-utils
+    echo "    [Native Mode] Base dependencies only."
 
     # Ensure legacy CUPS is stopped so Python can bind to port 631
     if systemctl is-active --quiet cups; then
@@ -102,7 +192,9 @@ install -o root -g root -m 0644 "${SRC_DIR}/installer.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/ipp_server.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/mqtt_service.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/notifier.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/pdf_processor.py" "${INSTALL_DIR}/"
+install -o root -g root -m 0644 "${SRC_DIR}/printer_capabilities.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/updater.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/version.py" "${INSTALL_DIR}/"
 install -o root -g root -m 0644 "${SRC_DIR}/web_app.py" "${INSTALL_DIR}/"
@@ -173,6 +265,17 @@ echo "==> 7/8 Registering the systemd unit"
 install -o root -g root -m 0644 \
     "${REPO_ROOT}/deploy/debian/${SERVICE_NAME}.service" \
     "/etc/systemd/system/${SERVICE_NAME}.service"
+
+# The unit must run as the user this script actually created. A unit shipped
+# with a different User= than SERVICE_USER makes systemd fail with
+# 'status=217/USER' before Python is even started, which looks exactly like a
+# service that starts and dies in a restart loop.
+if [[ "${SERVICE_USER}" != "root" ]]; then
+    sed -i -e "s/^User=.*/User=${SERVICE_USER}/" \
+           -e "s/^Group=.*/Group=${SERVICE_USER}/" \
+           "/etc/systemd/system/${SERVICE_NAME}.service"
+fi
+echo "    Unit runs as $(grep -m1 '^User=' "/etc/systemd/system/${SERVICE_NAME}.service" | cut -d= -f2)"
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
 
@@ -203,6 +306,7 @@ echo
 INSTALLED_VERSION="$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo '0.0').$(cat "${REPO_ROOT}/BUILD_NUMBER" 2>/dev/null || echo 0)"
 echo "Installation complete (version ${INSTALLED_VERSION})."
 echo "  Status:  systemctl status ${SERVICE_NAME}"
+
 echo "  Logs:    journalctl -u ${SERVICE_NAME} -f"
 echo "  Config:  ${CONFIG_DIR}/WolsCAPrintService.json"
 echo "  Web app: http://$(hostname).local:${WEB_PORT}/"

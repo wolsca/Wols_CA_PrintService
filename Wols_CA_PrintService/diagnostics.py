@@ -214,6 +214,13 @@ def phase_config(d):
             optional=True)
     d.info("Intake queues", json.dumps(c.get("intake", {}).get("queues", []), indent=2))
 
+    mqtt_user, mqtt_password = config.get_mqtt_credentials()
+    d.check("MQTT broker account configured", bool(mqtt_user and mqtt_password),
+            f"mqtt.user={mqtt_user or 'empty'} (create this account on the broker)")
+    mode = c.get("settings", {}).get("print_mode")
+    d.check("Default print mode known", mode in config.PRINT_MODES,
+            f"settings.print_mode={mode}, expected one of {', '.join(config.PRINT_MODES)}")
+
 
 def phase_permissions(d):
     """Ownership and access rights of every location the service touches."""
@@ -349,8 +356,21 @@ def phase_printer(d):
                    if t.get("id") == c.get("printers", {}).get("default")), None)
     if target:
         host = target.get("host")
-    if host:
-        d.command(["ping", "-c", "2", "-W", "2", host], f"Ping {host}")
+
+    # The configured host only matters when the job really leaves over the
+    # network. With the virtual printer of the test container (a file backend)
+    # the physical printer is not part of the path, so pinging it says nothing.
+    network_uri = uri.startswith(("ipp://", "ipps://", "socket://", "http://", "https://"))
+    raw_dispatch = bool(target) and target.get("dispatch") == "raw"
+    host_in_path = bool(host) and (network_uri or raw_dispatch)
+    if host and not host_in_path:
+        d.info(f"Ping {host} skipped",
+               detail=f"the output goes to {uri or 'the CUPS output queue'}, "
+                      f"not to {host}")
+    elif host:
+        # ICMP is often blocked (firewall, container bridge) while IPP works, so
+        # an unanswered ping is a warning, never a failure.
+        d.command(["ping", "-c", "2", "-W", "2", host], f"Ping {host}", optional=True)
     if not uri:
         d.check("hardware.printer_uri configured", False)
         return
@@ -365,6 +385,16 @@ def phase_printer(d):
     d.command(["lpstat", "-l", "-p", c.get("hardware", {}).get("cups_queue_name") or "WolsCA_Output"],
               "Details of the output queue", optional=True)
 
+    # Who asks for the flip: the button on the printer or the Continue button of
+    # the service. Only one of the two is ever offered.
+    import printer_capabilities
+    owner = printer_capabilities.flip_owner(target)
+    d.info(f"Flip confirmed by the {owner}", detail=printer_capabilities.describe(target))
+    if owner == "printer":
+        d.check("'ipptool' available for the printer confirmed flip",
+                bool(shutil.which("ipptool")),
+                "the job is sent straight to the printer, not through the output queue")
+
 
 def phase_network(d):
     """MQTT broker, mDNS and the web app."""
@@ -376,8 +406,14 @@ def phase_network(d):
             d.check(f"TCP connection to the MQTT broker {broker}:{port}", True)
     except OSError as e:
         d.check(f"TCP connection to the MQTT broker {broker}:{port}", False, str(e))
+    mqtt_user, _ = config.get_mqtt_credentials()
+    # In the test container the broker is not part of what is being released, so
+    # a rejected login must not block the build pipeline; on a real installation
+    # it stays a failure, because Home Assistant would get nothing.
+    is_test_container = str(os.environ.get("WOLSCA_VIRTUAL_OUTPUT", "")).lower() in ("1", "true", "yes")
     d.check("MQTT client connected", mqtt_service.mqtt_client.is_connected(),
-            f"topic prefix {mqtt_service.PREFIX}")
+            f"topic prefix {mqtt_service.PREFIX}, account '{mqtt_user}' "
+            f"(the broker must know this account)", optional=is_test_container)
 
     web = c.get("web", {})
     if web.get("enabled", True):
@@ -391,6 +427,22 @@ def phase_network(d):
     d.command(["avahi-browse", "-rt", "_ipp._tcp"], "IPP services announced over mDNS",
               timeout=20, optional=True)
     d.command(["ss", "-ltnp"], "Listening TCP sockets", optional=True)
+
+
+def phase_notify(d):
+    """Push notifications: configuration and a real test message."""
+    import notifier
+
+    info = notifier.describe()
+    if not info["enabled"]:
+        d.info("Notifications are switched off", detail="notify.enabled is false")
+        return
+    d.check("Notification server configured", bool(info["url"]), info["url"])
+    topic = notifier.ensure_topic()
+    d.check("Notification topic present", bool(topic),
+            f"subscribe on the phone: {notifier.subscribe_url(topic)}")
+    ok, detail = notifier.self_test()
+    d.check("Test notification delivered", ok, detail)
 
 
 def phase_chain(d):
@@ -455,12 +507,13 @@ PHASES = {
     "cups": phase_cups,
     "printer": phase_printer,
     "network": phase_network,
+    "notify": phase_notify,
     "chain": phase_chain
 }
 
 # 'chain' actually submits a print job, so it is not part of the default run.
 DEFAULT_PHASES = ["system", "config", "admin", "permissions", "update",
-                  "cups", "printer", "network"]
+                  "cups", "printer", "network", "notify"]
 
 
 def run(phases=None, publish=True):

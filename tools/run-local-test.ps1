@@ -55,7 +55,7 @@ try {
     }
     else {
         Write-Host "Web app will be on http://localhost:8080/ , CUPS on http://localhost:6631/"
-        docker run @common -p 8080:8080 -p 6631:631 --name wolsca-print-test $image service
+        docker run @common -p 8080:8080 -p 6631:631 --name wolsca $image service
     }
 }
 finally {
