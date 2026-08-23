@@ -5,21 +5,33 @@ import signal
 import threading
 import queue
 import platform
-import config
-import mqtt_service
-import hardware_dispatcher
-import pdf_processor
-import file_watcher
-import job_log
-import notifier
-import printer_capabilities
-import web_app
-import installer
-import diagnostics
-import updater
-import version
-from watchdog.observers import Observer
-from watchdog.observers.polling import PollingObserver
+try:
+    import config
+    import mqtt_service
+    import hardware_dispatcher
+    import pdf_processor
+    import file_watcher
+    import job_log
+    import notifier
+    import printer_capabilities
+    import web_app
+    import installer
+    import diagnostics
+    import updater
+    import version
+    from watchdog.observers import Observer
+    from watchdog.observers.polling import PollingObserver
+except ImportError as import_error:
+    # An incomplete installation dies here, before anything of the service runs,
+    # and systemd then only shows 'status=1/FAILURE'. Say which module is
+    # missing and where it was looked for, so the journal names the cause.
+    print(f"[Fatal] The service cannot start: {import_error}")
+    print(f"[Fatal] Directory: {os.path.dirname(os.path.abspath(__file__))}")
+    print("[Fatal] A module or dependency is missing from this installation - "
+          "re-run deploy/debian/install.sh (it copies every module and verifies "
+          "that they import).")
+    sys.stdout.flush()
+    raise
 
 # Release 'x.y' from the VERSION file plus the commit number from BUILD_NUMBER.
 SERVICE_VERSION = version.FULL_VERSION

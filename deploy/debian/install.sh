@@ -196,22 +196,27 @@ chown "${SERVICE_USER}:lp" "${SPOOL_DIR}"
 chmod 2775 "${SPOOL_DIR}"
 
 echo "==> 4/8 Copying application files"
-install -o root -g root -m 0644 "${SRC_DIR}/admin.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/config.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/diagnostics.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/file_watcher.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/hardware_dispatcher.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/installer.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/ipp_server.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/mqtt_service.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/notifier.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/pdf_processor.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/printer_capabilities.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/updater.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/version.py" "${INSTALL_DIR}/"
-install -o root -g root -m 0644 "${SRC_DIR}/web_app.py" "${INSTALL_DIR}/"
+# Every module, not a hand kept list. A list has to be extended with every new
+# file, and a module that is forgotten is only noticed on the server: the
+# service then dies on its first 'import' with nothing but 'status=1/FAILURE'
+# in systemctl status. Anything the service needs at run time lives in SRC_DIR,
+# so copying *.py plus the strings file cannot fall behind again.
+shopt -s nullglob
+modules=("${SRC_DIR}"/*.py)
+shopt -u nullglob
+if [[ ${#modules[@]} -eq 0 ]]; then
+    echo "    ERROR: no Python module found in ${SRC_DIR}" >&2
+    exit 1
+fi
+for module in "${modules[@]}"; do
+    install -o root -g root -m 0644 "${module}" "${INSTALL_DIR}/"
+done
+echo "    ${#modules[@]} Python modules copied"
 install -o root -g root -m 0644 "${SRC_DIR}/web_strings.json" "${INSTALL_DIR}/"
+
+# A module left behind by an older version can shadow the new one; the compiled
+# cache of a removed module does the same.
+rm -rf "${INSTALL_DIR}/__pycache__"
 install -o root -g root -m 0644 "${REPO_ROOT}/requirements.txt" "${INSTALL_DIR}/"
 
 # The version files travel next to the modules, so the service reports the right
@@ -238,6 +243,15 @@ fi
 "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
 "${INSTALL_DIR}/venv/bin/pip" install segno || \
     echo "    (optional 'segno' package not installed; /qr shows the plain URL)"
+
+# Fail here, with the reason on screen, instead of leaving a service that dies
+# on its first import with only 'status=1/FAILURE' to show for it.
+echo "    Verifying the installed modules"
+if ! ( cd "${INSTALL_DIR}" && WOLSCA_CONFIG="${CONFIG_DIR}/WolsCAPrintService.json" \
+        "${INSTALL_DIR}/venv/bin/python" -B -c "import main" ) ; then
+    echo "    ERROR: ${INSTALL_DIR} cannot be imported - see the traceback above." >&2
+    exit 1
+fi
 
 echo "==> 6/8 Configuring Architecture-Specific Network Settings"
 mkdir -p /etc/systemd/system/${SERVICE_NAME}.service.d

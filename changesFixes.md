@@ -246,6 +246,17 @@ empties this file again, so it always describes only the *unreleased* work.
 
 ## Fixes
 
+- **The installer no longer leaves modules behind, which is what made the service die with
+  `status=1/FAILURE` right after start.** `install.sh` copied the application files from a
+  hand-maintained list of `install` lines, so every module added since - `job_log.py`,
+  `printer_power.py` and `printer_discovery.py` - was never copied to `/opt/wolsca-print-service`.
+  The service then stopped on its very first `import job_log`, before any of its own code ran, and
+  systemd showed nothing but `activating (auto-restart)` with exit code 1 (~100 ms, ~13 MB memory).
+  The installer now copies **every** `*.py` of the source directory, removes a stale `__pycache__`
+  (a leftover module can shadow the new one) and verifies that `main` imports in the freshly built
+  virtualenv - the installation stops there, with the traceback on screen, instead of ending with a
+  service that cannot start. `main.py` reports a failing import itself as well: `[Fatal] The service
+  cannot start: No module named ...` plus the directory it looked in.
 - **The service no longer stops with a bare `status=1/FAILURE` at start-up.** A configuration file
   without a whole section - `paths` was not in the list that is filled in from the defaults, while
   `DROP_DIR` and `TEMP_DIR` are read straight from it - ended the process with a `KeyError` before

@@ -14,7 +14,7 @@ slug: wolsca_print_service_test
 description: >-
   Commit build of the Wols CA Print Service - for testing only, use the release
   add-on for normal operation.
-version: "build-1.4.390"
+version: "build-1.4.391"
 url: https://github.com/wolsca/Wols_CA_PrintService
 image: ghcr.io/wolsca/wols_ca_printservice
 arch:
