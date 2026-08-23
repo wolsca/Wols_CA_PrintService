@@ -6,6 +6,22 @@ empties this file again, so it always describes only the *unreleased* work.
 
 ## Changes
 
+- **The print mode is validated without case sensitivity, on its first letter.** `booklet`,
+  `BOOKLET`, `Booklet `, `b`, `duplex` and `s` are all understood - only the first letter counts
+  (**b** = Booklet, **d** = DoubleSided, **s** = SingleSided), with the known and old names tried
+  first. A differently spelled mode used to fall through every `print_mode == "Booklet"` comparison,
+  so the job silently ended up in another branch; the configuration editor (web app and Home
+  Assistant) accepts the same spellings, and a name starting with none of the three letters is still
+  refused as unknown.
+- **The printers found are logged, and a new printer is reported.** Every search writes one
+  `[Discovery]` line per printer (name, address, port, MAC address, how it was found and whether
+  port 9100 is open), and a printer that was not on the network during an earlier search is
+  announced in the journal, in the *Administrator* card (*New printer found: ...*), over MQTT and as
+  an ntfy message - it is either the new or replaced machine to choose, or a device answering on IPP
+  that should not. Known printers are remembered by MAC address in
+  `<temp_directory>/known-printers.json`, so a changed IP address is not a new printer, the very
+  first search only records what is there, and the `network` self-test phase has the same check
+  (*No new printer on the network*).
 - The configuration file now carries its own version (`config_version`, currently `1.1.b`) and is
   upgraded step by step at start-up. A file without the key is a `1.0` file, the migrations newer
   than the version in the file are run in order (so 1.0 straight to a future 1.3 still runs every
@@ -230,6 +246,18 @@ empties this file again, so it always describes only the *unreleased* work.
 
 ## Fixes
 
+- **The service no longer stops with a bare `status=1/FAILURE` at start-up.** A configuration file
+  without a whole section - `paths` was not in the list that is filled in from the defaults, while
+  `DROP_DIR` and `TEMP_DIR` are read straight from it - ended the process with a `KeyError` before
+  anything started, and systemd only showed `activating (auto-restart)` with exit code 1. The
+  section is completed like every other one, and an unhandled error during start-up now prints
+  `[Fatal] The service stopped because of an unhandled error:` plus the traceback to the journal, so
+  the reason is on the `journalctl -u wolsca-print-service -e` output instead of nowhere.
+- **The configuration file can no longer end up empty.** It was written straight over itself, which
+  empties it before the new content is in, so a save that failed halfway - or two saves at the same
+  time, and the web app, Home Assistant and an upgrade all save - left a file of 0 bytes behind that
+  the service could not read any more. It is now written to `<file>.new` and moved into place in one
+  atomic step, guarded by a lock, so the file is either the old or the new version.
 - `installer.py` no longer aborts where there is no `apt-get` and no longer reports missing
   `systemctl` as an error, so `--install-printer` also runs inside a container.
 - The service no longer starts without its print queues: an installation done without the old

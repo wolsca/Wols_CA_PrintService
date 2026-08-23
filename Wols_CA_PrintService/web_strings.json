@@ -76,6 +76,7 @@
     "adminScanning": "Searching the network for printers...",
     "adminNoPrinters": "No printer found yet - search for printers.",
     "adminUsePrinter": "Use the selected printer",
+    "adminNewPrinter": "New printer found",
     "on": "on",
     "off": "off",
     "modes": {

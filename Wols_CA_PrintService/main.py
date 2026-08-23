@@ -409,17 +409,35 @@ def run_update(argv):
     sys.exit(0 if "Updated" in result["last_result"] else 1)
 
 
-if __name__ == "__main__":
-    if "--version" in sys.argv:
+def main(argv):
+    if "--version" in argv:
         for key, value in version.version_info().items():
             print(f"{key}: {value}")
-    elif "--install-printer" in sys.argv:
+    elif "--install-printer" in argv:
         installer.perform_cups_printer_install()
-    elif "--self-test" in sys.argv:
-        run_self_test(sys.argv)
-    elif "--check-update" in sys.argv:
-        run_update_check(sys.argv)
-    elif "--update" in sys.argv:
-        run_update(sys.argv)
+    elif "--self-test" in argv:
+        run_self_test(argv)
+    elif "--check-update" in argv:
+        run_update_check(argv)
+    elif "--update" in argv:
+        run_update(argv)
     else:
         start_service()
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv)
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        # systemd only shows 'status=1/FAILURE'; without this the reason of a
+        # crash during start-up was nowhere to be found. The traceback goes to
+        # the journal, so 'journalctl -u wolsca-print-service -e' names the line.
+        import traceback
+        print("[Fatal] The service stopped because of an unhandled error:")
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.exit(1)

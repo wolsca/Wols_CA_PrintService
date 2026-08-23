@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 import platform
 
 # Determine OS
@@ -48,6 +49,16 @@ PRINT_MODE_ALIASES = {
     "singlesided": "SingleSided",
 }
 
+# The three modes differ in their first letter, and that is all that has to be
+# recognised: 'booklet', 'BOOKLET', 'Boekje', 'b' and 'Booklet ' all mean the
+# same thing. A mode written differently used to fall through every comparison
+# ('print_mode == "Booklet"'), so the job silently landed in the wrong branch.
+PRINT_MODE_LETTERS = {
+    "b": "Booklet",
+    "d": "DoubleSided",
+    "s": "SingleSided",
+}
+
 # The intake queue id is an internal key: it names the cups-pdf instance
 # (/etc/cups/cups-pdf-<id>.conf) and the drop directory. Up to and including
 # version 1.4 these were 'duplex' and 'simplex', so both are translated.
@@ -57,11 +68,25 @@ INTAKE_ID_ALIASES = {
 }
 
 def normalize_print_mode(value):
-    """Maps an old or differently cased mode name onto its current name."""
+    """Maps an old, differently cased or abbreviated mode onto its current name.
+
+    Validation is deliberately not case sensitive: first the known names and old
+    names are tried, and otherwise the first letter decides ('b' = Booklet,
+    'd' = DoubleSided, 's' = SingleSided). A value that starts with none of the
+    three is returned unchanged, so it is still reported as unknown instead of
+    being turned into an arbitrary mode.
+    """
     if not value:
         return value
     text = str(value).strip()
-    return PRINT_MODE_ALIASES.get(text.lower(), text)
+    known = PRINT_MODE_ALIASES.get(text.lower())
+    if known:
+        return known
+    return PRINT_MODE_LETTERS.get(text[:1].lower(), text)
+
+def is_print_mode(value, mode):
+    """True when `value` means `mode`, whatever its spelling."""
+    return normalize_print_mode(value) == mode
 
 def normalize_intake_id(value):
     """Maps an old or differently cased queue id onto its current id."""
@@ -426,7 +451,10 @@ def load_or_create_config():
             with open(CONFIG_PATH, 'r') as f:
                 config_data = json.load(f)
                 # Ensure all main sections exist
-                for section in ("mqtt", "settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake", "update"):
+                # 'paths' belongs in this list too: DROP_DIR and TEMP_DIR are
+                # read straight from it below, so a file without the section
+                # used to end the service with a KeyError before it started.
+                for section in ("paths", "mqtt", "settings", "hardware", "virtual_printer", "printers", "web", "notify", "history", "intake", "update"):
                     if section not in config_data:
                         config_data[section] = default_config[section]
 
@@ -442,7 +470,7 @@ def load_or_create_config():
 
                 # Fill in missing sub-keys to keep backward compatibility - the
                 # safety net for a section a migration does not cover.
-                for section in ("mqtt", "hardware", "web", "notify", "history", "printers", "intake", "update"):
+                for section in ("paths", "mqtt", "hardware", "web", "notify", "history", "printers", "intake", "update"):
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
 
@@ -456,15 +484,29 @@ def load_or_create_config():
         config_data = default_config
         save_config()
 
+_save_lock = threading.Lock()
+
 def save_config():
-    """Saves the current configuration state to the JSON file."""
-    try:
-        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(config_data, f, indent=4)
-        print("[System] Configuration saved successfully.")
-    except Exception as e:
-        print(f"[Error] Could not save config file: {e}")
+    """Saves the current configuration state to the JSON file.
+
+    Written to a temporary file next to it and then moved into place: opening
+    the file for writing empties it first, so a save that fails halfway (or two
+    saves at the same time - the web app, Home Assistant and an upgrade all
+    save) leaves an empty configuration behind, and the service then no longer
+    starts. The move is atomic, so the file is either the old or the new one.
+    """
+    with _save_lock:
+        try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            temporary = f"{CONFIG_PATH}.new"
+            with open(temporary, 'w') as f:
+                json.dump(config_data, f, indent=4)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, CONFIG_PATH)
+            print("[System] Configuration saved successfully.")
+        except Exception as e:
+            print(f"[Error] Could not save config file: {e}")
 
 def get_config():
     return config_data

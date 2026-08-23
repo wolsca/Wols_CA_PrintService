@@ -189,8 +189,23 @@ The *Administrator* card of the web app has a drop down of the printers that sup
 
 Each entry shows the name, the address, the port and the MAC address that belongs to it. **Use the
 selected printer** takes all of that over at once - `hardware.printer_uri`, the host of the target
-and the MAC address - so a new or replaced printer is configured without typing an address. The same
-list is in the self-test: `main.py --self-test network`.
+and the MAC address - so a new or replaced printer is configured without typing an address.
+
+Every search writes its result to the journal - one line per printer with the name, the address, the
+port, the MAC address, how it was found and whether port 9100 is open:
+
+```bash
+journalctl -u wolsca-print-service | grep '\[Discovery\]'
+```
+
+A printer that was **not** on the network during an earlier search is reported: in the journal, as a
+warning in the *Administrator* card (*New printer found: ...*), over MQTT and as an ntfy message.
+That is either the new or replaced machine that still has to be chosen, or a device answering on IPP
+that has no business doing so. Which printers are already known is remembered in
+`<temp_directory>/known-printers.json` - by MAC address, so a changed IP address is not a new printer.
+The very first search only records what is there, and deleting the file makes everything new again.
+The self-test has the same check: *No new printer on the network* (`main.py --self-test network`).
+
 
 ### Keeping the printer MAC address correct
 
@@ -392,6 +407,8 @@ server - it is what the *Update now* button uses.
 | Printing stops with `The printer was not recognised` | Same cause as above. Correct the wired/Wi-Fi address, or switch `hardware.block_on_mac_change` off to print anyway |
 | The printer got another IP address (DHCP) | Nothing to do: with `hardware.recover_printer_ip` on the printer is looked up by its MAC address and `hardware.printer_uri` plus the target host are corrected. It only works with a MAC address filled in and the printer on the same subnet |
 | The printer was moved from cable to Wi-Fi | Fill in both `hardware.printer_mac_wired` and `hardware.printer_mac_wifi`; the service then only switches `hardware.printer_mac` over (self-test: *Printer MAC address switched to the other interface*) instead of warning |
+| *New printer found* / self-test: `No new printer on the network` | A printer that was not on the network during an earlier search answered now. When it is the new or replaced machine, choose it with *Use the selected printer*; otherwise check which device is answering on IPP there. Known printers are remembered in `<temp_directory>/known-printers.json` |
+| Which printers were found | One `[Discovery]` line per printer in the journal: `journalctl -u wolsca-print-service \| grep '\[Discovery\]'`, or `main.py --self-test network` |
 | No printer in the *Search for printers* drop down | The printer must be switched on and in the subnet of the server. Check `avahi-browse -rt _ipp._tcp` and whether port 631 answers (`nc -z <printer-ip> 631`); a printer behind a router is not found |
 | A queue prints on the wrong printer | `intake.queues[].printer` (*Printer for ...* in the web app) wins over the default printer, and a personal choice in the web app wins over that; the `printer:` line of the job log names the source |
 | The self-test report can only be screenshotted | Use *Copy report*, or *Open report as plain text* (`http://<host>:8080/api/diagnostics/report.txt`) and select everything there |
@@ -404,6 +421,9 @@ server - it is what the *Update now* button uses.
 | Progress bar stays at 0% | Real-time progress requires `dispatch: cups` and the `ipptool` command |
 | A print "does nothing" and you cannot see why | The job log names the step it stopped at: *Job log* card in the web app, the *Print Job Step* / *Print Job Result* attributes in Home Assistant, or `journalctl -u wolsca-print-service \| grep '^\[Job'` |
 | Printed in the wrong mode | The `mode:` line of the job log says whether the mode came from the intake queue or from the web app/configuration |
+| Self-test: `Default print mode known` fails | Only the first letter counts and case does not matter: the mode must start with **b** (Booklet), **d** (DoubleSided) or **s** (SingleSided) - `booklet`, `BOOKLET`, `b` and `duplex` are all accepted, anything else is not |
+| `Active: activating (auto-restart)` with `status=1/FAILURE` right after start | The reason is now in the journal: `journalctl -u wolsca-print-service -e` shows `[Fatal] The service stopped because of an unhandled error:` with the traceback. A configuration file missing a whole section (such as `paths`) no longer causes this |
+| `Failed to read JSON config` / the configuration file is 0 bytes | The service falls back to the defaults and keeps running, but the file has to be repaired: the configuration is now saved to `<file>.new` and moved into place atomically, so it cannot be emptied by an interrupted save any more |
 | Job stuck in `WAITING_FOR_FLIP` | Press **CONTINUE** in the web app, *Resume Print (Flip)* in Home Assistant, or `curl -X POST http://localhost:8080/api/resume` |
 | Job cancelled automatically | Stale jobs are cancelled after `hardware.flip_timeout_seconds` (default 30 min) |
 | Web app not reachable | `ss -lntp \| grep 8080`; check `web.enabled`/`web.bind_address` and the firewall |

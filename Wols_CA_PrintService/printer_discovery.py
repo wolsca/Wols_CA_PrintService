@@ -22,6 +22,8 @@ does not need root.
 """
 
 import ipaddress
+import json
+import os
 import socket
 import subprocess
 import threading
@@ -44,9 +46,16 @@ state = {
     "printers": [],
     "scanned": None,
     "detail": "",
-    "running": False
+    "running": False,
+    # The printers of this scan that were never seen before.
+    "new": []
 }
 _lock = threading.Lock()
+
+# Which printers have been seen before, so a printer that appears on the network
+# can be reported instead of silently ending up in the list. It is not a
+# configuration setting, so it lives next to the job history.
+KNOWN_FILE = os.path.join(config.TEMP_DIR, "known-printers.json")
 
 
 def normalize_mac(value):
@@ -251,6 +260,72 @@ def uri_for(entry):
     return f"{scheme}://{entry['host']}:{entry.get('port') or IPP_PORT}/ipp/print"
 
 
+def printer_key(entry):
+    """What identifies a printer: its MAC address, or its address without one."""
+    return normalize_mac(entry.get("mac")) or f"host:{entry.get('host')}"
+
+
+def load_known():
+    """The printers seen during an earlier scan, as {key: label}."""
+    try:
+        with open(KNOWN_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_known(known):
+    try:
+        os.makedirs(os.path.dirname(KNOWN_FILE), exist_ok=True)
+        with open(KNOWN_FILE, "w", encoding="utf-8") as handle:
+            json.dump(known, handle, indent=4)
+    except OSError as e:
+        print(f"[Discovery] Could not remember the printers found: {e}")
+
+
+def report_new_printers(result):
+    """Warns the administrator about a printer that was never seen before.
+
+    A printer appearing on the network is worth knowing: it is a new or replaced
+    machine to pick in the web app - or something answering on IPP that has no
+    business doing so. The very first scan only records what is there, because
+    then everything would be 'new'.
+    """
+    known = load_known()
+    first_scan = not known
+    fresh = [e for e in result if printer_key(e) not in known]
+    for entry in result:
+        known[printer_key(entry)] = entry["label"]
+    save_known(known)
+
+    with _lock:
+        # On the very first search nothing is 'new' - there was simply nothing
+        # to compare with yet, and a warning about every printer helps nobody.
+        state["new"] = [] if first_scan else [e["label"] for e in fresh]
+    if not fresh or first_scan:
+        if first_scan and result:
+            print(f"[Discovery] {len(result)} printer(s) recorded as known; from now on a "
+                  f"printer that appears on the network is reported.")
+        return
+
+    message = ("New printer on the network: "
+               + "; ".join(e["label"] for e in fresh)
+               + ". Choose it in the web app when it has to be printed on, or check "
+                 "which device this is.")
+    print(f"[Discovery] {message}")
+    try:
+        import mqtt_service
+        mqtt_service.publish_log(message, "warning")
+    except Exception:
+        pass
+    try:
+        import notifier
+        notifier.send(message, title="New printer found")
+    except Exception:
+        pass
+
+
 def discover(include_scan=True):
     """The list of IPP printers on the network, mDNS first, then the port scan.
 
@@ -296,6 +371,14 @@ def discover(include_scan=True):
                                "no printer with IPP support found - is it switched on and "
                                "on this subnet?")
         print(f"[Discovery] {state['detail']}")
+        # Every printer in the journal, one line each: this is the only place
+        # where 'which machines on this network speak IPP' is written down, and
+        # it is what a wrong printer or a double address is recognised by.
+        for entry in result:
+            print(f"[Discovery] {entry['label']} "
+                  f"({entry['source']}, {entry['uri']}"
+                  f"{', port 9100 open' if entry['raw_port_open'] else ''})")
+        report_new_printers(result)
         return result
     finally:
         with _lock:
@@ -306,4 +389,5 @@ def payload():
     """What the web app needs: the list plus when it was made."""
     with _lock:
         return {"printers": list(state["printers"]), "scanned": state["scanned"],
-                "detail": state["detail"], "running": state["running"]}
+                "detail": state["detail"], "running": state["running"],
+                "new": list(state["new"])}

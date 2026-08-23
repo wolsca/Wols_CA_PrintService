@@ -561,10 +561,16 @@ function renderDiscovery(d) {
   select.disabled = !list.length;
   byId("usePrinter").disabled = !list.length;
   byId("scanPrinters").disabled = !!d.running;
-  byId("discoveryDetail").textContent = d.running
+  var text = d.running
       ? (T.adminScanning || "Searching the network for printers...")
       : (list.length ? (d.detail || "") + (d.scanned ? " (" + d.scanned + ")" : "")
                      : (T.adminNoPrinters || "No printer found yet - search for printers."));
+  // A printer that was not there before: either the new machine to print on,
+  // or a device that should not be answering on IPP at all.
+  if (!d.running && d.new && d.new.length) {
+    text = (T.adminNewPrinter || "New printer found") + ": " + d.new.join("; ") + " - " + text;
+  }
+  byId("discoveryDetail").textContent = text;
 }
 
 function renderAdmin(a) {

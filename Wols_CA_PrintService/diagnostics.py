@@ -218,8 +218,15 @@ def phase_config(d):
     d.check("MQTT broker account configured", bool(mqtt_user and mqtt_password),
             f"mqtt.user={mqtt_user or 'empty'} (create this account on the broker)")
     mode = c.get("settings", {}).get("print_mode")
-    d.check("Default print mode known", mode in config.PRINT_MODES,
-            f"settings.print_mode={mode}, expected one of {', '.join(config.PRINT_MODES)}")
+    # Not case sensitive and an abbreviation is enough: 'booklet', 'B' and
+    # 'Booklet' are the same mode, only a name starting with another letter is
+    # really unknown.
+    resolved = config.normalize_print_mode(mode)
+    d.check("Default print mode known", resolved in config.PRINT_MODES,
+            f"settings.print_mode={mode}"
+            + (f" (read as {resolved})" if resolved != mode else "")
+            + f", expected one of {', '.join(config.PRINT_MODES)} "
+              f"(the first letter b/d/s is enough)")
 
 
 def phase_permissions(d):
@@ -585,8 +592,17 @@ def phase_network(d):
     found = printer_discovery.discover()
     d.check("Printers with IPP support found", bool(found),
             printer_discovery.state["detail"], optional=True,
-            output="\n".join(f"{p['label']} [{p['source']}]" for p in found)
+            output="\n".join(f"{p['label']} [{p['source']}] {p['uri']}" for p in found)
                    or "nothing answered on port 631 and nothing announced itself over mDNS")
+    # A printer that was not on the network during an earlier search: worth a
+    # warning, because it is either the new machine to print on or a device
+    # answering on IPP that should not.
+    fresh = printer_discovery.state.get("new") or []
+    d.check("No new printer on the network", not fresh,
+            "; ".join(fresh) + " - choose it in the web app when it has to be printed on, "
+            "or check which device this is." if fresh else
+            "every printer found was seen during an earlier search",
+            optional=True)
     d.command(["ss", "-ltnp"], "Listening TCP sockets", optional=True)
 
 

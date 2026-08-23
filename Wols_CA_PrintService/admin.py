@@ -204,9 +204,19 @@ def coerce(field, value):
         return number
     if kind == "select":
         text = str(value).strip()
-        if text not in field["options"]:
-            raise ValueError(f"{field['label']}: must be one of {', '.join(field['options'])}")
-        return text
+        if text in field["options"]:
+            return text
+        # A choice is not case sensitive; the print mode on top of that accepts
+        # an old name or just its first letter (b/d/s), so 'booklet' from Home
+        # Assistant or a hand edited file is not refused.
+        for option in field["options"]:
+            if option.lower() == text.lower():
+                return option
+        if field["key"].endswith("print_mode"):
+            resolved = config.normalize_print_mode(text)
+            if resolved in field["options"]:
+                return resolved
+        raise ValueError(f"{field['label']}: must be one of {', '.join(field['options'])}")
     return str(value)
 
 
@@ -239,10 +249,17 @@ def discovery_payload():
 def discover_printers():
     """Scans the network for printers with IPP support."""
     import printer_discovery
-    printers = printer_discovery.discover()
+    printer_discovery.discover()
     state["last_result"] = printer_discovery.state["detail"]
+    # A printer that was not on the network before is worth saying out loud: it
+    # is either the new machine to print on, or a device that has no business
+    # answering on IPP.
+    fresh = printer_discovery.state.get("new") or []
+    if fresh:
+        state["last_result"] += (" - new since the last search: "
+                                 + "; ".join(fresh))
     publish_state()
-    return {"printers": printers, "detail": state["last_result"]}
+    return dict(printer_discovery.payload(), detail=state["last_result"])
 
 
 def discover_async():
