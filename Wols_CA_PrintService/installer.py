@@ -54,7 +54,21 @@ def check_virtual_printer():
         script_path = os.path.abspath(sys.argv[0])
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" --install-printer', None, 1)
 
+def queue_exists(queue_name):
+    result = subprocess.run(["lpstat", "-p", queue_name], capture_output=True, text=True)
+    return result.returncode == 0
+
+
 def check_cups_queue():
+    """Verifies the intake queues at start-up and creates the missing ones.
+
+    Nothing can be printed to a queue that does not exist, so only telling the
+    administrator to run '--install-printer' left the service unusable (the log
+    repeated "CUPS queue 'WolsCA_Booklet' not found" on every start). The unit
+    runs as root, so the queues are simply created here - exactly the same code
+    path as '--install-printer' - and the hint is only printed when that is not
+    possible.
+    """
     c = config.get_config()
     queue = c["virtual_printer"].get("cups_queue_name", "WolsCA_Booklet")
 
@@ -62,14 +76,48 @@ def check_cups_queue():
         print("[Zero-Touch] CUPS is not installed. Run the service once with '--install-printer' as root to deploy cups-pdf.")
         return
 
-    expected = [entry["cups_queue"] for entry in intake_queues()] or [queue]
-    for queue_name in expected:
-        result = subprocess.run(["lpstat", "-p", queue_name], capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"[Zero-Touch] CUPS queue '{queue_name}' not found.")
-            print("[Zero-Touch] Run 'sudo <python> main.py --install-printer' to create it.")
+    queues = intake_queues() or [{"id": "booklet", "cups_queue": queue,
+                                  "description": "Wols CA Booklet Intake",
+                                  "print_mode": "Booklet",
+                                  "directory": config.DROP_DIR}]
+    missing = [entry for entry in queues if not queue_exists(entry["cups_queue"])]
+    for entry in queues:
+        if entry not in missing:
+            print(f"[Zero-Touch] CUPS queue '{entry['cups_queue']}' is available.")
+
+    if not missing:
+        return
+
+    names = ", ".join(entry["cups_queue"] for entry in missing)
+    can_create = shutil.which("lpadmin") and getattr(os, "geteuid", lambda: 1)() == 0
+    if not can_create:
+        print(f"[Zero-Touch] CUPS queue(s) not found: {names}.")
+        print("[Zero-Touch] Run 'sudo <python> main.py --install-printer' to create them.")
+        return
+
+    print(f"[Zero-Touch] CUPS queue(s) not found: {names} - creating them now.")
+    share = c["virtual_printer"].get("cups_share_on_network", True)
+    for entry in missing:
+        try:
+            create_intake_queue(entry, share)
+        except Exception as e:
+            print(f"[Zero-Touch] Could not create '{entry['cups_queue']}': {e}")
+    if share:
+        enable_network_sharing()
+    for entry in missing:
+        if queue_exists(entry["cups_queue"]):
+            print(f"[Zero-Touch] CUPS queue '{entry['cups_queue']}' created.")
         else:
-            print(f"[Zero-Touch] CUPS queue '{queue_name}' is available.")
+            print(f"[Zero-Touch] CUPS queue '{entry['cups_queue']}' could not be created. "
+                  "Run 'sudo <python> main.py --install-printer' for the full deployment.")
+
+    output_queue = c.get("hardware", {}).get("cups_queue_name") or "WolsCA_Output"
+    if not queue_exists(output_queue):
+        print(f"[Zero-Touch] Output queue '{output_queue}' not found - creating it now.")
+        try:
+            ensure_physical_queue()
+        except Exception as e:
+            print(f"[Zero-Touch] Could not create the output queue: {e}")
 
 def run_root_command(args, description):
     print(f"[Admin] {description}")

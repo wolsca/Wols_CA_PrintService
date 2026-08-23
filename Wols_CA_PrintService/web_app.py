@@ -156,6 +156,14 @@ input[type=text], input[type=password], input[type=number] { width: 100%; min-he
   <button class="ghost" id="reprint"></button>
   <button class="danger" id="cancel"></button>
 </div>
+<div class="card" id="logCard">
+  <div class="row"><span id="lblLog" class="state" style="font-size:18px"></span><span class="tag" id="logTag">-</span></div>
+  <p id="logSummary" class="muted"></p>
+  <button class="ghost" id="toggleLog"></button>
+  <button class="ghost" id="copyLog"></button>
+  <p id="copyLogHint" class="muted"></p>
+  <pre id="logReport" hidden></pre>
+</div>
 <div class="card" id="testCard">
   <div class="row"><span id="lblTest" class="state" style="font-size:18px"></span><span class="tag" id="testResult">-</span></div>
   <p id="testSummary" class="muted"></p>
@@ -208,6 +216,9 @@ byId("runTest").textContent = T.selfTestRun || "Run self-test";
 byId("runChainTest").textContent = T.selfTestRunChain || "Run self-test incl. test print";
 byId("toggleTest").textContent = T.selfTestShow || "Show report";
 byId("copyTest").textContent = T.selfTestCopy || "Copy report";
+byId("lblLog").textContent = T.jobLogTitle || "Job log";
+byId("toggleLog").textContent = T.jobLogShow || "Show job log";
+byId("copyLog").textContent = T.jobLogCopy || "Copy job log";
 byId("lblUpdate").textContent = T.updateTitle || "Version and updates";
 byId("lblInstalled").textContent = T.updateInstalled || "Installed version";
 byId("lblLatest").textContent = T.updateLatest || "Latest version";
@@ -268,6 +279,46 @@ function renderTest(r) {
   byId("copyTest").disabled = !markdown;
 }
 
+function renderLog(r) {
+  var job = r.current || (r.jobs && r.jobs[0]) || null;
+  var tag = byId("logTag");
+  var result = job ? job.result : "NONE";
+  tag.textContent = result;
+  tag.className = "tag " + (result === "COMPLETED" ? "pass"
+                          : (result === "ERROR" ? "fail"
+                          : (result === "CANCELLED" ? "warn" : "")));
+  if (job) {
+    var steps = job.steps || [];
+    var last = steps.length ? steps[steps.length - 1] : null;
+    byId("logSummary").textContent = "#" + job.id + " " + (job.filename || "-")
+        + (last ? " - " + last.step + ": " + last.message : "");
+  } else {
+    byId("logSummary").textContent = T.jobLogNone || "No print job yet.";
+  }
+  // Only rewrite when it changed, otherwise every poll destroys a selection.
+  var pre = byId("logReport");
+  var text = r.text || "";
+  if (pre.textContent !== text) pre.textContent = text;
+  byId("copyLog").disabled = !text;
+}
+
+function pollLog() {
+  fetch("/api/joblog", {cache: "no-store"}).then(function(r) { return r.json(); }).then(renderLog).catch(function(){});
+}
+
+byId("toggleLog").onclick = function() {
+  var pre = byId("logReport");
+  pre.hidden = !pre.hidden;
+  byId("toggleLog").textContent = pre.hidden ? (T.jobLogShow || "Show job log")
+                                             : (T.jobLogHide || "Hide job log");
+};
+byId("copyLog").onclick = function() {
+  var text = byId("logReport").textContent || "";
+  if (!text) return;
+  copyText(text, byId("copyLogHint"), byId("logReport"), byId("toggleLog"),
+           T.jobLogHide || "Hide job log");
+};
+
 function pollTest() {
   fetch("/api/diagnostics", {cache: "no-store"}).then(function(r) { return r.json(); }).then(renderTest).catch(function(){});
 }
@@ -289,6 +340,42 @@ byId("toggleTest").onclick = function() {
 function copyHint(text) {
   byId("copyTestHint").textContent = text;
   setTimeout(function() { byId("copyTestHint").textContent = ""; }, 4000);
+}
+// Shared by the self-test report and the job log: the clipboard API only exists
+// on a secure origin, and the web app is normally plain http.
+function copyText(text, hintNode, pre, toggle, hideLabel) {
+  var note = function(message) {
+    hintNode.textContent = message;
+    setTimeout(function() { hintNode.textContent = ""; }, 4000);
+  };
+  var fallback = function() {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(area);
+    if (ok) { note(T.selfTestCopied || "Copied to the clipboard."); return; }
+    pre.hidden = false;
+    toggle.textContent = hideLabel;
+    var range = document.createRange();
+    range.selectNodeContents(pre);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    note(T.selfTestCopyFailed || "Could not copy automatically - press Ctrl+C.");
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function() {
+      note(T.selfTestCopied || "Copied to the clipboard.");
+    }).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 function selectReport() {
   // Last resort: show the report, select it and let the user press Ctrl+C.
@@ -490,6 +577,8 @@ poll();
 setInterval(poll, 2000);
 pollTest();
 setInterval(pollTest, 4000);
+pollLog();
+setInterval(pollLog, 3000);
 pollUpdate();
 setInterval(pollUpdate, 10000);
 </script>
@@ -593,6 +682,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
             if not self.admin_authorised():
                 return
             self.send_json(admin.fields_payload())
+        elif path == "/api/joblog":
+            import job_log
+            self.send_json(job_log.payload())
         elif path == "/api/diagnostics":
             import diagnostics
             report = dict(diagnostics.last_report or {"result": "NONE"})
@@ -612,14 +704,25 @@ class WebAppHandler(BaseHTTPRequestHandler):
         if path == "/api/resume":
             with mqtt_service.state_lock:
                 owner = mqtt_service.job_state["flip_owner"]
+            import job_log
             if owner == "printer":
                 print("[Web] 'CONTINUE' ignored: the flip is confirmed on the printer itself.")
+                job_log.warn("flip", "Continue in the web app ignored - this printer asks for "
+                                     "the flip on its own panel")
             elif mqtt_service.waiting_for_user_action:
                 print("[Web] 'CONTINUE' pressed in the web app.")
+                job_log.step("flip", "Continue pressed in the web app")
                 mqtt_service.waiting_for_user_action = False
+            else:
+                print("[Web] 'CONTINUE' pressed while no job was waiting.")
+                job_log.warn("flip", "Continue pressed in the web app while no job was waiting")
         elif path == "/api/cancel":
+            import job_log
+            job_log.warn("cancel", "Cancel pressed in the web app")
             mqtt_service.request_cancel()
         elif path == "/api/reprint":
+            import job_log
+            job_log.step("flip", "Reprint of the front side requested in the web app")
             mqtt_service.request_reprint_front()
         elif path == "/api/diagnostics/run":
             import diagnostics

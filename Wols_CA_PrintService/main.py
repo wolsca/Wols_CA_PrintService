@@ -10,6 +10,7 @@ import mqtt_service
 import hardware_dispatcher
 import pdf_processor
 import file_watcher
+import job_log
 import notifier
 import printer_capabilities
 import web_app
@@ -45,7 +46,14 @@ def enqueue_print_job(filepath, intake=None):
         queued_files.append(name)
         waiting = len(queued_files)
     job_queue.put((path, intake))
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
     print(f"[Queue] Added '{name}' ({waiting} waiting).")
+    mqtt_service.publish_log(f"Queued '{name}' from "
+                             f"{(intake or {}).get('cups_queue') or 'the drop folder'} "
+                             f"({size} bytes, {waiting} waiting).", "info")
 
 def intake_directories():
     entries = []
@@ -63,6 +71,8 @@ def rescan_worker():
             file_watcher.scan_directory(directory, enqueue_print_job, q_entry)
 
 def wait_for_flip(filename, sheets, instruction, prompt=None):
+    job_log.step("flip", "Waiting for the user to put the sheets back and press Continue",
+                 sheets=sheets, instruction=instruction or None)
     mqtt_service.waiting_for_user_action = True
     mqtt_service.set_state("WAITING_FOR_FLIP",
                            prompt or f"Front side done. Put the {sheets} sheet(s) back in the tray and press Continue.",
@@ -79,7 +89,9 @@ def wait_for_flip(filename, sheets, instruction, prompt=None):
     if mqtt_service.cancel_requested():
         raise hardware_dispatcher.JobCancelled("Cancelled by user.")
     if mqtt_service.take_reprint_request():
+        job_log.step("flip", "Reprint of the front side requested")
         return "reprint"
+    job_log.step("flip", "Continue confirmed - printing the other side")
     return "resume"
 
 def remove_quietly(*paths):
@@ -94,12 +106,20 @@ def process_print_job(filepath, intake=None):
     print(f"\n--- NEW PRINT JOB DETECTED ---")
     print(f"[File] {filename}")
 
-    target, _ = web_app.resolve_target_printer()
+    # Everything this job does is written to one timeline (journal, MQTT for
+    # Home Assistant, the web app and the history file), so a job that goes
+    # wrong shows exactly which step it was.
+    job_log.start(filename,
+                  source=(intake or {}).get("cups_queue") or "drop folder",
+                  path=filepath)
+
+    target, printer_source = web_app.resolve_target_printer()
     options = web_app.resolve_job_options()
     web_app.consume_pending_options()
     mqtt_service.reset_job_control()
 
     copies = options["copies"]
+    mode_source = "intake queue" if intake and "print_mode" in intake else "web app / configuration"
     print_mode = intake["print_mode"] if intake and "print_mode" in intake else options["print_mode"]
     print_mode = config.normalize_print_mode(print_mode)
     instruction = target.get("flip_instruction") or config.get_config()["hardware"].get("flip_instruction", "")
@@ -111,21 +131,41 @@ def process_print_job(filepath, intake=None):
     printer_flip = not duplex and printer_capabilities.flip_owner(target) == "printer"
     mqtt_service.set_flip_owner("printer" if printer_flip else "service")
 
+    job_log.field(print_mode=print_mode, printer=target["name"], copies=copies)
+    job_log.step("mode", f"Print mode '{print_mode}' from the {mode_source}",
+                 copies=copies, requested=options["print_mode"])
+    job_log.step("printer", f"Target '{target['name']}' ({printer_source})",
+                 dispatch=target.get("dispatch"), host=target.get("host"),
+                 port=target.get("port"), queue=target.get("cups_queue"),
+                 duplex_unit=duplex, flip_owner="printer" if printer_flip else "service")
+
     mqtt_service.set_state("PROCESSING", f"Analyzing {filename}", filename=filename,
                            copies=copies, print_mode=print_mode, printer_id=target["id"])
 
     front_pdf = back_pdf = duplex_pdf = blank_pdf = None
+    pages = 0
 
     try:
         pages = pdf_processor.validate_pdf(filepath)
+        job_log.field(pages=pages)
+        job_log.step("analyse", f"PDF is readable, {pages} page(s)",
+                     bytes=os.path.getsize(filepath))
 
         if print_mode == "Booklet":
             front_pdf, back_pdf, pages = pdf_processor.generate_booklet_pdfs(filepath)
             sheets = ((pages + 3) // 4)
+            job_log.field(sheets=sheets)
+            job_log.step("impose", f"Booklet imposition done: {sheets} sheet(s) of A4, "
+                                   f"two A5 pages per side", pages=pages,
+                         front=os.path.basename(front_pdf), back=os.path.basename(back_pdf))
             if duplex or printer_flip:
                 duplex_pdf = pdf_processor.generate_duplex_booklet_pdf(front_pdf, back_pdf, filename)
+                job_log.step("impose", "Front and back interleaved into one duplex document",
+                             reason="duplex unit" if duplex else "the printer asks for the flip itself")
                 hardware_dispatcher.dispatch_to_printer_ipp(duplex_pdf, "Booklet-Duplex", target, side="both", copies=copies, duplex=duplex, total_sheets=sheets * 2, sides="two-sided-short-edge" if printer_flip else None, shutdown_event=shutdown_event, manual_duplex_sheets=sheets if printer_flip else 0)
             else:
+                job_log.step("plan", "Manual flip: the front sides are printed first, "
+                                     "then Continue prints the back sides", sheets=sheets)
                 while True:
                     hardware_dispatcher.dispatch_to_printer_ipp(front_pdf, "Booklet-Front", target, side="front", copies=copies, total_sheets=sheets, shutdown_event=shutdown_event)
                     if wait_for_flip(filename, sheets, instruction) == "resume": break
@@ -133,6 +173,7 @@ def process_print_job(filepath, intake=None):
 
         elif print_mode == "DoubleSided":
             sheets = (pages + 1) // 2
+            job_log.field(sheets=sheets)
 
             # A single page can be given a paper change of its own, so special
             # paper can be loaded for exactly this page without another job
@@ -146,10 +187,12 @@ def process_print_job(filepath, intake=None):
             if pages == 1:
                 paper_change = str(config.get_config()["hardware"].get(
                     "single_page_paper_change", "off") or "off").strip().lower()
+                job_log.step("plan", f"Single page in DoubleSided mode, paper change '{paper_change}'")
 
             if paper_change == "printer":
                 uri = config.get_config()["hardware"].get("printer_uri", "")
                 mqtt_service.set_flip_owner("printer")
+                job_log.step("plan", "Straight to the printer over IPP, manual feed slot", uri=uri)
                 hardware_dispatcher.dispatch_via_ipp_manual_tray(
                     filepath, uri, copies,
                     config.get_config()["hardware"].get("single_page_media_source") or "manual",
@@ -161,6 +204,7 @@ def process_print_job(filepath, intake=None):
                 hardware_dispatcher.dispatch_to_printer_ipp(filepath, "DoubleSided-SinglePage", target, side="back", copies=copies, total_sheets=1, sides="one-sided", shutdown_event=shutdown_event)
             elif paper_change == "blank":
                 blank_pdf = pdf_processor.generate_blank_front_pdf(filepath)
+                job_log.step("impose", "Blank front side added, so the page lands on the back")
                 if printer_flip:
                     hardware_dispatcher.dispatch_to_printer_ipp(blank_pdf, "DoubleSided-BlankFront", target, side="both", copies=copies, total_sheets=1, sides="two-sided-long-edge", shutdown_event=shutdown_event, manual_duplex_sheets=1)
                 else:
@@ -172,31 +216,50 @@ def process_print_job(filepath, intake=None):
             elif duplex or printer_flip or pages < 2:
                 # Bugfix: Bypass mechanical hardware flip for single-page documents
                 actual_sides = "two-sided-long-edge" if ((duplex or printer_flip) and pages > 1) else "one-sided"
+                job_log.step("plan", f"One job with sides={actual_sides}",
+                             reason="duplex unit" if duplex else
+                                    ("the printer asks for the flip itself" if printer_flip
+                                     else "single page"))
                 hardware_dispatcher.dispatch_to_printer_ipp(filepath, "DoubleSided", target, side="both", copies=copies, duplex=duplex, total_sheets=pages, sides=actual_sides, shutdown_event=shutdown_event, manual_duplex_sheets=sheets if (printer_flip and pages > 1) else 0)
             else:
                 front_pdf, back_pdf, pages = pdf_processor.generate_two_sided_pdfs(filepath)
+                job_log.step("impose", f"Split into odd and even pages: {sheets} sheet(s), "
+                                       f"manual flip in between", pages=pages)
                 while True:
                     hardware_dispatcher.dispatch_to_printer_ipp(front_pdf, "Duplex-Front", target, side="front", copies=copies, total_sheets=sheets, sides="one-sided", shutdown_event=shutdown_event)
                     if wait_for_flip(filename, sheets, instruction) == "resume": break
                 hardware_dispatcher.dispatch_to_printer_ipp(back_pdf, "Duplex-Back", target, side="back", copies=copies, total_sheets=sheets, sides="one-sided", shutdown_event=shutdown_event)
 
         elif print_mode == "SingleSided":
+            job_log.field(sheets=pages)
+            job_log.step("plan", "One job, no imposition, sides=one-sided", pages=pages)
             hardware_dispatcher.dispatch_to_printer_ipp(filepath, "SingleSided", target, copies=copies, total_sheets=pages, sides="one-sided", shutdown_event=shutdown_event)
         else:
+            job_log.warn("plan", f"Unknown print mode '{print_mode}' - sent to the printer unchanged",
+                         pages=pages)
             hardware_dispatcher.dispatch_to_printer_ipp(filepath, print_mode, target, copies=copies, total_sheets=pages, shutdown_event=shutdown_event)
 
         mqtt_service.set_state("COMPLETED", f"Processed {filename}", side=None)
         notifier.notify_completed(filename, pages)
         if os.path.exists(filepath): os.remove(filepath)
+        job_log.finish("COMPLETED", f"Processed {filename} ({pages} page(s))")
 
     except hardware_dispatcher.JobCancelled as jc:
         mqtt_service.set_state("CANCELLED", str(jc), side=None)
         remove_quietly(filepath)
+        job_log.finish("CANCELLED", str(jc))
     except Exception as e:
         mqtt_service.set_state("ERROR", str(e), side=None)
         notifier.notify_error(str(e), filename)
+        # The document itself is deliberately kept, so the job can be retried
+        # once the cause named in the timeline has been repaired.
+        job_log.error("failed", f"{type(e).__name__}: {e}", exception=e, file=filepath)
+        job_log.finish("ERROR", str(e))
 
     finally:
+        # Nothing may leave the timeline open, otherwise the next job would
+        # append its steps to this one.
+        job_log.finish("ERROR", "The job ended without a result.")
         remove_quietly(front_pdf, back_pdf, duplex_pdf, blank_pdf)
         mqtt_service.set_flip_owner("service")
         mqtt_service.waiting_for_user_action = False
@@ -230,6 +293,7 @@ def start_service():
     print(f"  Hybrid Architecture - CUPS Intake Active")
     print(f"===================================================\n")
 
+    job_log.load_history()
     threading.Thread(target=installer.check_virtual_printer, daemon=True).start()
     mqtt_service.start_mqtt()
     httpd = web_app.start_web_app()
@@ -246,8 +310,11 @@ def start_service():
         print("[System] Using the polling file observer (WOLSCA_POLL_WATCHER).")
 
     observer.schedule(file_watcher.PrintFolderWatcher(shutdown_event, enqueue_print_job), config.DROP_DIR, recursive=False)
+    print(f"[System] Watching {config.DROP_DIR} (drop folder).")
     for directory, q_entry in intake_directories():
         os.makedirs(directory, exist_ok=True)
+        print(f"[System] Watching {directory} for queue "
+              f"'{q_entry.get('cups_queue')}' ({q_entry.get('print_mode')}).")
         # recursive: cups-pdf writes into a per-user subfolder for known accounts.
         observer.schedule(file_watcher.PrintFolderWatcher(shutdown_event, enqueue_print_job, q_entry), directory, recursive=True)
 

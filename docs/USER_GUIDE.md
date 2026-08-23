@@ -142,7 +142,8 @@ A file copied into the top level of the drop folder uses the mode selected in th
 | **Job stuck "Waiting for flip"** | Open the web app and press the **CONTINUE** button. Ensure you have re-inserted the paper correctly. |
 | **Job cancelled itself** | Jobs are automatically cancelled after 30 minutes of waiting to prevent blocking the queue. |
 | **Second document does nothing** | The service prints jobs one by one. Check the web app to see if your job is in the waiting list. |
-| **Only one printer shows up** | The other two queues were not created. The administrator has to run the installer with `--with-cups`. |
+| **Nothing comes out and you do not know why** | Open the **Job log** card in the web app: it shows every step of your job (which printer, which mode, what the printer answered) and where it stopped. *Copy job log* copies the whole thing so it can be sent to the administrator. |
+| **Only one printer shows up** | The other two queues were not created. The administrator has to run the installer again (CUPS and all queues are included by default) or restart the service, which creates missing queues itself. |
 | **Printed single sided although I chose Booklet in the web app** | You printed to the `WolsCA_SingleSided` printer. The printer you select in the print dialog always wins; use `WolsCA_Booklet` instead. |
 | **Blank pages at the end** | A booklet requires a multiple of 4 pages. If your document has 5 pages, 3 blank A5 sides will be added to complete the last sheet. |
 | **Files not appearing in drop folder** | Check network share permissions. Ensure the service has write access to the spool directories. |

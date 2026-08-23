@@ -8,7 +8,13 @@
 #
 # Tested on Debian 12/13 and Ubuntu 22.04/24.04 (any apt based derivative).
 #
-# Usage: sudo ./deploy/debian/install.sh [--with-cups]
+# Usage: sudo ./deploy/debian/install.sh [--without-cups]
+#
+# CUPS is installed and the intake queues are created by default, because the
+# service is useless without them: without the queues nothing can be printed to
+# it and the start-up check only reports "CUPS queue 'WolsCA_...' not found".
+# Use --without-cups for the rare case where CUPS is managed elsewhere.
+# --with-cups is still accepted and does nothing, so old commands keep working.
 #
 set -euo pipefail
 
@@ -17,11 +23,12 @@ INSTALL_DIR="/opt/${SERVICE_NAME}"
 CONFIG_DIR="/etc/wolsca"
 SPOOL_DIR="/var/spool/wolsca"
 SERVICE_USER="root"
-WITH_CUPS="no"
+WITH_CUPS="yes"
 
 for arg in "$@"; do
     case "${arg}" in
-        --with-cups) WITH_CUPS="yes" ;;
+        --with-cups) WITH_CUPS="yes" ;;              # default, kept for compatibility
+        --without-cups|--no-cups) WITH_CUPS="no" ;;
         *) echo "Unknown option: ${arg}" >&2; exit 1 ;;
     esac
 done

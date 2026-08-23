@@ -40,18 +40,20 @@ web app can fetch a release from it later.
 ### 2. Run the installer
 
 ```bash
-sudo ./deploy/debian/install.sh --with-cups
+sudo ./deploy/debian/install.sh
 ```
 
-Use `--with-cups` for the hybrid architecture (CUPS intake queues + `cups-pdf` +
-the Python service). Without it the service runs in native IPP mode.
+The hybrid architecture (CUPS intake queues + `cups-pdf` + the Python service)
+is the default, because without the queues nothing can be printed to the
+service. Pass `--without-cups` to run in native IPP mode instead; `--with-cups`
+is still accepted and does nothing.
 
 To upgrade an existing installation later, pull and run the same command again:
 
 ```bash
 cd /usr/local/src/wolsca-print-service
 sudo git pull
-sudo ./deploy/debian/install.sh --with-cups
+sudo ./deploy/debian/install.sh
 ```
 
 ### 3. Verify

@@ -31,9 +31,18 @@ class PrintFolderWatcher(FileSystemEventHandler):
         if not path or os.path.isdir(path):
             return
         ext = os.path.splitext(path)[1].lower()
+        queue = (self.intake or {}).get("cups_queue") or "the drop folder"
         if ext == ".pdf":
             if wait_until_file_is_complete(path, self.shutdown_event):
                 self.enqueue_callback(path, self.intake)
+            else:
+                # Nothing arrives in the queue in this case, so without this the
+                # job disappears without a trace.
+                print(f"[Warning] '{os.path.basename(path)}' from {queue} never finished "
+                      f"being written; it is not printed.")
+                mqtt_service.publish_log(f"'{os.path.basename(path)}' from {queue} was still "
+                                         f"being written after 120 s and is not printed.",
+                                         "warning")
         elif ext in [".prn", ".ps", ".pcl"]:
             filename = os.path.basename(path)
             print(f"[Warning] Ignored {ext} file: {filename}. Service requires PDF files.")
@@ -82,3 +91,6 @@ def scan_directory(directory, enqueue_callback, intake=None, recursive=True):
                 enqueue_callback(path, intake)
             elif ext in [".prn", ".ps", ".pcl"]:
                 print(f"[Warning] Ignored {ext} file: {filename}. Service requires PDF files.")
+                mqtt_service.publish_log(f"Ignored unsupported file format '{filename}' in "
+                                         f"{directory}. The queue must use a PDF driver.",
+                                         "warning")

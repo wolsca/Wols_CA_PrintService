@@ -4,6 +4,7 @@ import subprocess
 import os
 import shutil
 import config
+import job_log
 import mqtt_service
 
 class JobCancelled(Exception):
@@ -108,6 +109,12 @@ def ipp_template_file(name, body):
     return path
 
 
+def _tail(*outputs, lines=6):
+    """The last lines of stdout/stderr - what a failing command really said."""
+    text = "\n".join(part.strip() for part in outputs if part and part.strip())
+    return " | ".join(text.splitlines()[-lines:]) or None
+
+
 def ipp_attribute(output, name):
     """The value of one attribute out of verbose ipptool output."""
     for line in (output or "").splitlines():
@@ -128,6 +135,7 @@ def dispatch_via_ipp_manual_duplex(pdf_path, uri, copies, sides, sheet_count,
     the two-sided request.
     """
     if not shutil.which("ipptool"):
+        job_log.error("submit", "'ipptool' is missing - install the package 'cups-ipp-utils'")
         raise ValueError("'ipptool' is required for printer confirmed flipping.")
 
     request = ipp_template_file("print-job-manual-duplex.test", IPP_MANUAL_DUPLEX_REQUEST)
@@ -142,20 +150,28 @@ def dispatch_via_ipp_manual_duplex(pdf_path, uri, copies, sides, sheet_count,
 
     print(f"[Hardware] Submitting to {uri} (sides={sides}, "
           f"manual-duplex-sheet-count={sheet_count}).")
+    job_log.step("submit", f"Direct IPP print job to {uri}", sides=sides,
+                 sheet_count=sheet_count, copies=copies, command=" ".join(command))
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
+        job_log.error("submit", f"The printer at {uri} did not answer within 120 s")
         raise ValueError(f"The printer at {uri} did not accept the job in time.")
 
     if result.returncode != 0 or "successful-ok" not in (result.stdout or ""):
         detail = (result.stderr or result.stdout or "").strip().splitlines()
+        job_log.error("submit", "The printer refused the job", exit_code=result.returncode,
+                      output=_tail(result.stdout, result.stderr))
         raise ValueError(f"The printer refused the job: {detail[-1] if detail else 'no answer'}")
 
     job_id = ipp_attribute(result.stdout, "job-id")
     if not job_id or not job_id.isdigit():
         print("[Hardware] Job accepted, but the printer returned no job id; not waiting for it.")
+        job_log.warn("submit", "The printer accepted the job but returned no job id, "
+                               "so its progress cannot be followed")
         return
 
+    job_log.step("submit", f"Accepted by the printer as job {job_id}", job_id=job_id)
     poll_ipp_job(uri, job_id, sheet_count * copies, side, shutdown_event)
 
 
@@ -169,6 +185,7 @@ def dispatch_via_ipp_manual_tray(pdf_path, uri, copies, media_source, side,
     because the CUPS output queue would drop the media-source.
     """
     if not shutil.which("ipptool"):
+        job_log.error("submit", "'ipptool' is missing - install the package 'cups-ipp-utils'")
         raise ValueError("'ipptool' is required for the paper change on the printer.")
 
     request = ipp_template_file("print-job-manual-tray.test", IPP_MANUAL_TRAY_REQUEST)
@@ -182,19 +199,28 @@ def dispatch_via_ipp_manual_tray(pdf_path, uri, copies, media_source, side,
 
     print(f"[Hardware] Submitting to {uri} (media-source={media_source}); "
           f"the printer asks for the paper on its own panel.")
+    job_log.step("submit", f"Direct IPP print job to {uri}, manual feed slot",
+                 media_source=media_source, copies=copies, command=" ".join(command))
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
+        job_log.error("submit", f"The printer at {uri} did not answer within 120 s")
         raise ValueError(f"The printer at {uri} did not accept the job in time.")
 
     if result.returncode != 0 or "successful-ok" not in (result.stdout or ""):
         detail = (result.stderr or result.stdout or "").strip().splitlines()
+        job_log.error("submit", "The printer refused the job", exit_code=result.returncode,
+                      output=_tail(result.stdout, result.stderr))
         raise ValueError(f"The printer refused the job: {detail[-1] if detail else 'no answer'}")
 
     job_id = ipp_attribute(result.stdout, "job-id")
     if not job_id or not job_id.isdigit():
         print("[Hardware] Job accepted, but the printer returned no job id; not waiting for it.")
+        job_log.warn("submit", "The printer accepted the job but returned no job id, "
+                               "so its progress cannot be followed")
         return
+
+    job_log.step("submit", f"Accepted by the printer as job {job_id}", job_id=job_id)
 
     poll_ipp_job(uri, job_id, copies, side, shutdown_event,
                  waiting_detail="Put the paper in the manual feed slot and press the "
@@ -220,7 +246,9 @@ def poll_ipp_job(uri, job_id, expected, side, shutdown_event=None, waiting_detai
         try:
             result = subprocess.run(["ipptool", "-tv", "-d", f"job-id={job_id}", uri, request],
                                     capture_output=True, text=True, timeout=20)
-        except Exception:
+        except Exception as e:
+            job_log.warn("progress", f"The printer stopped answering, so job {job_id} is no "
+                                     f"longer followed", error=str(e))
             break
 
         state = ipp_attribute(result.stdout, "job-state") or ""
@@ -235,6 +263,8 @@ def poll_ipp_job(uri, job_id, expected, side, shutdown_event=None, waiting_detai
         if waiting:
             if not reported_flip:
                 print("[Hardware] The printer is asking on its own panel to put the sheets back.")
+                job_log.step("flip", "The printer asks on its own panel to put the sheets back",
+                             job_state=state, reasons=reasons)
                 reported_flip = True
             mqtt_service.set_state("WAITING_FOR_FLIP",
                                    waiting_detail or "Put the sheets back in the tray and "
@@ -248,6 +278,9 @@ def poll_ipp_job(uri, job_id, expected, side, shutdown_event=None, waiting_detai
                                    flip_owner="printer")
 
         if state.startswith(("completed", "canceled", "aborted")):
+            level = "info" if state.startswith("completed") else "warning"
+            job_log.step("printed", f"The printer reports job {job_id} as {state.strip()}",
+                         level, sheets=sheets_done, expected=expected, reasons=reasons or None)
             break
         time.sleep(2)
 
@@ -262,12 +295,20 @@ def dispatch_via_socket(pdf_path, target, copies):
     # Security & Protocol Guard: Prevent sending raw bytes to HTTPS/IPP port.
     if port in (443, 631):
         print(f"[Hardware] Warning: Port {port} is for IPP/IPPS, but dispatch mode is 'raw'. Overriding to port 9100 for JetDirect raw socket transfer.")
+        job_log.warn("submit", f"Port {port} is an IPP port but the dispatch mode is 'raw' - "
+                               f"using port 9100 instead")
         port = 9100
 
     print(f"[Hardware] Direct TCP Socket transfer initiating to {printer_ip}:{port}")
 
     with open(pdf_path, 'rb') as f:
         data = f.read()
+
+    # Raw JetDirect gives no feedback at all: the printer never reports whether
+    # it printed the document, so what was sent is all the log can show.
+    job_log.step("submit", f"Raw JetDirect transfer to {printer_ip}:{port}",
+                 file=os.path.basename(pdf_path), bytes=len(data), copies=copies,
+                 feedback="none - the printer reports nothing back over port 9100")
 
     for copy_index in range(copies):
         if mqtt_service.cancel_requested():
@@ -278,14 +319,31 @@ def dispatch_via_socket(pdf_path, target, copies):
                 s.connect((printer_ip, port))
                 s.sendall(data)
         except socket.timeout:
+            job_log.error("submit", f"No answer from {printer_ip}:{port} within 15 s")
             raise ValueError(f"Connection to printer ({printer_ip}) timed out.")
         except ConnectionRefusedError:
+            job_log.error("submit", f"{printer_ip} refused the connection on port {port} - "
+                                    f"raw printing (JetDirect) must be enabled on the printer")
             raise ValueError(f"Printer ({printer_ip}) refused the connection on port {port}.")
         except Exception as e:
+            job_log.error("submit", f"Raw transfer to {printer_ip}:{port} failed: {e}", exception=e)
             raise ValueError(f"Hardware dispatch failed: {str(e)}")
         if copies > 1:
             print(f"[Hardware] Copy {copy_index + 1}/{copies} sent.")
+        job_log.step("printed", f"Copy {copy_index + 1} of {copies} handed over to the printer",
+                     bytes=len(data))
         time.sleep(2)
+
+def queue_status(queue_name):
+    """The one line 'lpstat -p' gives about a queue - disabled, paused, idle."""
+    try:
+        result = subprocess.run(["lpstat", "-p", queue_name], capture_output=True,
+                                text=True, timeout=10)
+    except Exception:
+        return None
+    return (result.stdout or result.stderr or "").strip().splitlines()[0] \
+        if (result.stdout or result.stderr).strip() else None
+
 
 def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, sides=None, shutdown_event=None):
     """Sends the job through a local CUPS queue, providing page progress."""
@@ -300,11 +358,17 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
     command += ["-o", "media=A4", pdf_path]
 
     print(f"[Hardware] Submitting to CUPS queue '{queue_name}' (sides={sides or 'default'}).")
+    job_log.step("submit", f"Handing the document to the CUPS queue '{queue_name}'",
+                 sides=sides or "default", copies=copies, sheets=total_sheets,
+                 command=" ".join(command))
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
     except FileNotFoundError:
+        job_log.error("submit", "The command 'lp' is missing - install the package 'cups-client'")
         raise ValueError("CUPS command 'lp' is not available on this host.")
     except subprocess.CalledProcessError as e:
+        job_log.error("submit", f"CUPS refused the job on queue '{queue_name}'",
+                      exit_code=e.returncode, output=_tail(e.stdout, e.stderr))
         raise ValueError(f"CUPS refused the job: {(e.stderr or '').strip() or e}")
 
     job_id = None
@@ -315,11 +379,17 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
 
     if not job_id:
         print("[Hardware] Job submitted, but CUPS returned no job id; no progress available.")
+        job_log.warn("submit", "CUPS accepted the job but returned no job id, so its "
+                               "progress cannot be followed", output=_tail(result.stdout))
         return
 
     expected = max(1, total_sheets * copies)
+    job_log.step("submit", f"Accepted by CUPS as job {queue_name}-{job_id}",
+                 job_id=job_id, expected_sheets=expected)
 
     # Loop and monitor status
+    last_reported = -1
+    reported_no_progress = False
     is_shutting_down = False
     while not is_shutting_down:
         if shutdown_event and shutdown_event.is_set():
@@ -327,13 +397,21 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
 
         if mqtt_service.cancel_requested():
             subprocess.run(["cancel", f"{queue_name}-{job_id}"], capture_output=True)
+            job_log.warn("cancel", f"CUPS job {queue_name}-{job_id} cancelled on request")
             raise JobCancelled("Cancelled while the printer was working.")
 
         done = cups_job_impressions(queue_name, job_id)
         if done is not None:
+            if done != last_reported:
+                job_log.step("progress", f"Sheet {min(done, expected)} of {expected} printed")
+                last_reported = done
             mqtt_service.set_state("PRINTING",
                                    f"Sheet {min(done, expected)} of {expected}",
                                    sheets_done=min(done, expected), side=side)
+        elif not reported_no_progress:
+            job_log.warn("progress", "CUPS reports no page progress for this job "
+                                     "('ipptool' from cups-ipp-utils is needed for that)")
+            reported_no_progress = True
 
         active = subprocess.run(["lpstat", "-o", queue_name], capture_output=True, text=True)
         if f"{queue_name}-{job_id}" not in (active.stdout or ""):
@@ -341,6 +419,12 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
         time.sleep(2)
 
     print(f"[Hardware] CUPS job {queue_name}-{job_id} finished.")
+    # 'Left the queue' is not the same as 'printed': CUPS also drops a job it
+    # could not deliver, and its reason is in the CUPS log.
+    reason = queue_status(queue_name)
+    job_log.step("printed", f"CUPS job {queue_name}-{job_id} left the queue after "
+                            f"{last_reported if last_reported >= 0 else 0} of {expected} sheet(s)",
+                 queue_state=reason)
 
 def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
                             copies=1, duplex=False, total_sheets=0, sides=None, shutdown_event=None,
@@ -358,6 +442,14 @@ def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
     mqtt_service.set_state("PRINTING", f"Dispatching {os.path.basename(pdf_path)} to {target['name']}",
                            side=side, sheets_done=0, printer_id=target["id"], printer_name=target["name"])
 
+    job_log.step("dispatch", f"{print_mode_name}: sending "
+                             f"'{os.path.basename(pdf_path)}' to {target['name']}",
+                 side=side or "-", copies=copies, sheets=total_sheets,
+                 sides=sides or ("two-sided-short-edge" if duplex else "printer default"),
+                 route="printer over IPP" if manual_duplex_sheets > 0 else
+                       ("CUPS" if target.get("dispatch") == "cups" and shutil.which("lp")
+                        else "raw port 9100"))
+
     if manual_duplex_sheets > 0:
         uri = config.get_config()["hardware"].get("printer_uri", "")
         dispatch_via_ipp_manual_duplex(pdf_path, uri, copies,
@@ -366,6 +458,14 @@ def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
     elif target.get("dispatch") == "cups" and shutil.which("lp"):
         dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, sides, shutdown_event)
     else:
+        if target.get("dispatch") == "cups":
+            # Configured for CUPS but 'lp' is missing: without this line the job
+            # silently went out over raw port 9100 instead, losing the duplex
+            # and progress information.
+            job_log.warn("dispatch", "'lp' is not installed although the printer is configured "
+                                     "for CUPS - falling back to raw port 9100, so there is no "
+                                     "duplex control and no progress")
         dispatch_via_socket(pdf_path, target, copies)
 
     print(f"[Hardware] Transfer complete for {print_mode_name}.")
+    job_log.step("dispatch", f"{print_mode_name} handed over completely")

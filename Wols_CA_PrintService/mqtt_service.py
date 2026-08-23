@@ -181,6 +181,12 @@ def publish_ha_discovery():
 
     # Imported late: these modules import this one.
     try:
+        import job_log
+        job_log.publish_ha_discovery()
+    except Exception as e:
+        print(f"[Warning] Could not publish the job log discovery: {e}")
+
+    try:
         import diagnostics
         diagnostics.publish_ha_discovery()
     except Exception as e:
@@ -276,24 +282,31 @@ def on_message(client, userdata, msg):
         admin.handle_command(topic, payload)
         return
 
+    import job_log
+
     if topic == f"{PREFIX}/command" and payload == "RESUME":
         with state_lock:
             owner = job_state["flip_owner"]
         if owner == "printer":
             print("[System] 'RESUME' ignored: the flip is confirmed on the printer itself.")
+            job_log.warn("flip", "Continue from Home Assistant ignored - this printer asks "
+                                 "for the flip on its own panel")
         elif waiting_for_user_action:
             print("[System] 'RESUME' command received via MQTT. Continuing workflow...")
-            publish_log("Resume command received via MQTT. Continuing workflow.", "info")
+            job_log.step("flip", "Continue pressed in Home Assistant")
             waiting_for_user_action = False
+        else:
+            print("[System] 'RESUME' received while no job was waiting.")
+            job_log.warn("flip", "Continue pressed in Home Assistant while no job was waiting")
 
     elif topic == f"{PREFIX}/command" and payload == "CANCEL":
         print("[System] 'CANCEL' command received via MQTT.")
-        publish_log("Cancel command received via MQTT.", "warning")
+        job_log.warn("cancel", "Cancel pressed in Home Assistant")
         request_cancel()
 
     elif topic == f"{PREFIX}/command" and payload == "REPRINT":
         print("[System] 'REPRINT' command received via MQTT.")
-        publish_log("Reprint command received via MQTT.", "info")
+        job_log.step("flip", "Reprint of the front side requested in Home Assistant")
         request_reprint_front()
 
     elif topic == f"{PREFIX}/command" and payload.startswith("SELFTEST"):

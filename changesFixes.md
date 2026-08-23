@@ -122,10 +122,50 @@ empties this file again, so it always describes only the *unreleased* work.
   report and asking for Ctrl+C), because the web app is normally reached over plain `http`. The
   report text is also only rewritten when it really changed, so a selection survives the polling.
 
+- CUPS is no longer optional: `deploy/debian/install.sh` installs the printing tool chain and
+  creates the intake queues **by default**. `--with-cups` is still accepted and does nothing, and
+  the rare "CUPS is managed elsewhere" case is now `--without-cups`.
+
+- **Every print job now has a step by step log.** A job used to leave almost no trace - "NEW PRINT
+  JOB DETECTED", a state change and, at best, one error line - so there was no way to see *where* a
+  booklet, a double sided or a single sided job went wrong. New
+  `Wols_CA_PrintService/job_log.py` keeps one timeline per job and forwards it to all consumers at
+  once: the journal (one line per step, `[Job 12] dispatch: ...`), MQTT for Home Assistant, the web
+  app and a rolling history file (`history.enabled` / `history.max_entries` / `history.file` are in
+  use at last, default `<temp>/job-history.json`, restored at start-up).
+  Recorded are: the intake queue the file came from, the print mode **and where it came from**
+  (intake queue or web app/configuration), the target printer with its dispatch route, host, port,
+  CUPS queue and who confirms the flip, the PDF analysis, every imposition (booklet, duplex
+  interleave, blank front, odd/even split), the chosen plan per branch, the exact `lp`/`ipptool`
+  command line, the job id CUPS or the printer returned, page progress, the flip wait and who
+  pressed Continue (web app, Home Assistant or the printer panel), and the result - with the
+  exception type, message and traceback when it failed.
+- **Home Assistant can answer "where did it go wrong?"**: three new sensors - *Print Job Step*
+  (state = the step name, attributes = the complete timeline of the running job), *Print Job Detail*
+  (`level: message` of the last step, usable as an automation trigger) and *Print Job Result* (the
+  result of the last finished job with its whole timeline as attributes). They are published on
+  `<prefix>/job/step` and `<prefix>/job/last`, both retained.
+- The web app has a **Job log** card next to the self-test: the last step of the current job, the
+  full timeline behind *Show job log* and a *Copy job log* button (the clipboard code is now shared
+  with the self-test report). New endpoint `GET /api/joblog`.
+- Things that silently swallowed a job are now reported: a PDF that never stops growing (the spooler
+  never finished writing it), a `.prn`/`.ps`/`.pcl` file found by the rescan, a printer configured
+  for CUPS while `lp` is missing (the job would quietly leave over raw port 9100 without duplex or
+  progress), a missing `ipptool`, and CUPS dropping a job - the state of the queue is queried and
+  logged when the job leaves it. At start-up every watched directory is logged with the queue and
+  the print mode it belongs to.
+
 ## Fixes
 
 - `installer.py` no longer aborts where there is no `apt-get` and no longer reports missing
   `systemctl` as an error, so `--install-printer` also runs inside a container.
+- The service no longer starts without its print queues: an installation done without the old
+  `--with-cups` flag left the log repeating `[Zero-Touch] CUPS queue 'WolsCA_Booklet' not found. Run
+  'sudo <python> main.py --install-printer' to create it.` on every start, and nothing could be
+  printed. CUPS is now part of the default installation, and `installer.check_cups_queue()` creates
+  the missing intake queues itself (the same `create_intake_queue()` path as `--install-printer`,
+  plus network sharing and the physical output queue) whenever the service runs as root and
+  `lpadmin` is present. The old hint is only printed when creating them is not possible.
 - `install.sh` makes every script in `deploy/debian` executable itself (`chmod +x .../*.sh`, right
   after it resolved the repository root), so a checkout that lost the executable bit - Windows, a ZIP
   download, a copy over SMB - no longer stops at "Permission denied" on `fix-permissions.sh` or
