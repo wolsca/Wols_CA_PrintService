@@ -244,6 +244,16 @@ empties this file again, so it always describes only the *unreleased* work.
   `hardware.printer_mac` and `hardware.wait_for_printer_seconds` are editable in the web app and in
   Home Assistant.
 
+- **One command to update a server: `deploy/debian/update.sh`.** It is the manual counterpart of the
+  *Update now* button and runs exactly what `updater.py` runs - `git fetch --all --tags --prune`,
+  `git reset --hard origin/<branch>` (the branch of the checkout, or `--branch <name>`),
+  `chmod +x deploy/debian/*.sh`, `install.sh` and `systemctl status wolsca-print-service`. Options
+  other than `--branch` are passed on to the installer, so `--without-cups` works and `--with-cups`
+  is still accepted as a no-op. Two details the hand typed sequence gets wrong: the executable bit
+  is restored *after* the reset (a reset does not restore it), and the whole script is one function
+  called on its last line, because `git reset --hard` rewrites `update.sh` while bash is still
+  reading it.
+
 ## Fixes
 
 - **The installer no longer leaves modules behind, which is what made the service die with

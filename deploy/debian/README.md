@@ -371,10 +371,29 @@ allow the broker port (1883) outbound. The installer does this automatically whe
 ## 7. Upgrading and removal
 
 ```bash
-git pull && sudo ./deploy/debian/install.sh   # re-run, keeps the configuration
+sudo ./deploy/debian/update.sh                # fetch, reset, install, status
+git pull && sudo ./deploy/debian/install.sh    # or by hand, keeps the configuration
 sudo ./deploy/debian/uninstall.sh             # remove, keeps config + spool
 sudo ./deploy/debian/uninstall.sh --purge     # remove everything
 ```
+
+`update.sh` is the manual counterpart of the *Update now* button and runs exactly
+what the service runs itself:
+
+1. `git fetch --all --tags --prune` and `git reset --hard origin/<branch>` in the
+   checkout (the branch of the checkout, or `--branch <name>`);
+2. `chmod +x deploy/debian/*.sh` - the executable bit is lost by a Windows
+   checkout or a ZIP download, and `git reset --hard` does not restore it;
+3. `deploy/debian/install.sh` - every option you give `update.sh` other than
+   `--branch` is passed on to it (`--without-cups`, and `--with-cups` is still
+   accepted and does nothing);
+4. `systemctl status wolsca-print-service`.
+
+The whole script is one function that is called on its last line, because
+`git reset --hard` rewrites `update.sh` while it is running - otherwise bash
+would read the new file halfway through and stop somewhere unpredictable. Note
+that the reset **throws away local changes in the checkout**; the configuration
+in `/etc/wolsca` is not part of it and is kept.
 
 ### Updating from Home Assistant or the web app
 
