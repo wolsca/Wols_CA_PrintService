@@ -45,6 +45,12 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC_DIR="${REPO_ROOT}/Wols_CA_PrintService"
 
+# A checkout from Windows, a ZIP download or a copy over SMB loses the executable
+# bit, so 'sudo ./deploy/debian/install.sh' fails with "Permission denied" and the
+# scripts this installer calls (fix-permissions.sh, uninstall.sh) cannot be run
+# either. Restore it for every script here, so it only has to be right once.
+chmod +x "${REPO_ROOT}"/deploy/debian/*.sh 2>/dev/null || true
+
 echo "==> 1/8 Installing OS packages and managing port 631"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update

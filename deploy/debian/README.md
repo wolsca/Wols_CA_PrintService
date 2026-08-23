@@ -59,7 +59,7 @@ cd /usr/local/src/wolsca-print-service
 ## 3. Install the service
 
 ```bash
-chmod +x deploy/debian/*.sh          # only needed if the bit was lost on transfer
+chmod +x deploy/debian/*.sh          # only if this script itself is not executable
 sudo ./deploy/debian/install.sh --with-cups
 ```
 
@@ -236,6 +236,7 @@ server - it is what the *Update now* button uses.
 | Printer not offered on the phone | `avahi-browse -rt _ipp._tcp`; the queue must be shared (`lpadmin -p WolsCA_Booklet -o printer-is-shared=true`) |
 | Wrong printer used | A personal choice from the web app wins for `personal_choice_ttl_seconds`; check `journalctl` for the `[Printers] Target:` line |
 | `Printer refused the connection` | The physical printer must accept raw port 9100 (JetDirect) |
+| Self-test: `IPP get-printer-attributes ... exit code 1` | Install `cups-ipp-utils` (`ipptool`). If the retry over `ipp://<host>:631/...` in the same step succeeds, only TLS fails - the printer's certificate or TLS version is rejected; set `hardware.printer_uri` to the `ipp://` address |
 | Files land in a per-user folder | Re-run `--install-printer`; cups-pdf `Out`/`AnonDirName` must be the drop directory |
 | Permission denied on the drop dir | `sudo /opt/wolsca-print-service/fix-permissions.sh`; the service user must be in group `lp` and the directory mode `2775` |
 | `Errno 13` on the configuration file | `sudo /opt/wolsca-print-service/fix-permissions.sh`; `/etc/wolsca` must be `0755` and the JSON `0664` |

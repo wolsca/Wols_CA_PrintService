@@ -162,6 +162,8 @@ input[type=text], input[type=password], input[type=number] { width: 100%; min-he
   <button class="ghost" id="runTest"></button>
   <button class="ghost" id="runChainTest"></button>
   <button class="ghost" id="toggleTest"></button>
+  <button class="ghost" id="copyTest"></button>
+  <p id="copyTestHint" class="muted"></p>
   <pre id="testReport" hidden></pre>
 </div>
 <div class="card" id="updateCard">
@@ -205,6 +207,7 @@ byId("lblTest").textContent = T.selfTestTitle || "Self-test";
 byId("runTest").textContent = T.selfTestRun || "Run self-test";
 byId("runChainTest").textContent = T.selfTestRunChain || "Run self-test incl. test print";
 byId("toggleTest").textContent = T.selfTestShow || "Show report";
+byId("copyTest").textContent = T.selfTestCopy || "Copy report";
 byId("lblUpdate").textContent = T.updateTitle || "Version and updates";
 byId("lblInstalled").textContent = T.updateInstalled || "Installed version";
 byId("lblLatest").textContent = T.updateLatest || "Latest version";
@@ -255,9 +258,14 @@ function renderTest(r) {
   tag.className = "tag " + (result === "PASS" ? "pass" : (result === "FAIL" ? "fail" : (result === "WARN" ? "warn" : "")));
   byId("testSummary").textContent = r.running ? (T.selfTestRunning || "Running...")
                                               : (r.summary ? r.summary + " - " + (r.finished || "") : (T.selfTestNever || "Not run yet"));
-  byId("testReport").textContent = r.markdown || "";
+  // Only rewrite the report when it really changed, otherwise every poll would
+  // throw away a selection the user is making in it.
+  var report = byId("testReport");
+  var markdown = r.markdown || "";
+  if (report.textContent !== markdown) report.textContent = markdown;
   byId("runTest").disabled = !!r.running;
   byId("runChainTest").disabled = !!r.running;
+  byId("copyTest").disabled = !markdown;
 }
 
 function pollTest() {
@@ -278,6 +286,56 @@ byId("toggleTest").onclick = function() {
   pre.hidden = !pre.hidden;
   byId("toggleTest").textContent = pre.hidden ? (T.selfTestShow || "Show report") : (T.selfTestHide || "Hide report");
 };
+function copyHint(text) {
+  byId("copyTestHint").textContent = text;
+  setTimeout(function() { byId("copyTestHint").textContent = ""; }, 4000);
+}
+function selectReport() {
+  // Last resort: show the report, select it and let the user press Ctrl+C.
+  var pre = byId("testReport");
+  pre.hidden = false;
+  byId("toggleTest").textContent = T.selfTestHide || "Hide report";
+  var range = document.createRange();
+  range.selectNodeContents(pre);
+  var selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  copyHint(T.selfTestCopyFailed || "Could not copy automatically - press Ctrl+C.");
+}
+byId("copyTest").onclick = function() {
+  var text = byId("testReport").textContent || "";
+  if (!text) return;
+  // navigator.clipboard only exists on a secure origin, and the web app is
+  // normally reached over plain http, so the textarea path is the usual one.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function() {
+      copyHint(T.selfTestCopied || "Report copied to the clipboard.");
+    }).catch(function() { copyLegacy(text); });
+  } else {
+    copyLegacy(text);
+  }
+};
+function copyLegacy(text) {
+  var area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  document.body.appendChild(area);
+  var copied = false;
+  try {
+    area.select();
+    copied = document.execCommand("copy");
+  } catch (e) {
+    copied = false;
+  }
+  document.body.removeChild(area);
+  if (copied) {
+    copyHint(T.selfTestCopied || "Report copied to the clipboard.");
+  } else {
+    selectReport();
+  }
+}
 
 function renderUpdate(u) {
   var tag = byId("updateTag");

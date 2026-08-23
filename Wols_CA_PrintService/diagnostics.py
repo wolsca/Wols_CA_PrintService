@@ -347,6 +347,70 @@ def phase_cups(d):
             "the stock cups-pdf queue writes into an unwatched folder", optional=True)
 
 
+def plain_ipp_uri(uri):
+    """The unencrypted address of the same printer, used as a retry.
+
+    Many printers present a self signed certificate or only an old TLS version,
+    so 'ipps://host:443/ipp/print' fails while 'ipp://host:631/ipp/print'
+    answers. Returns None when there is nothing to fall back to.
+    """
+    if not str(uri).startswith("ipps://"):
+        return None
+    authority, _, path = uri[len("ipps://"):].partition("/")
+    host = authority.split("@")[-1]
+    if host.startswith("["):                      # IPv6 literal
+        host = host.split("]")[0] + "]"
+    elif ":" in host:
+        host = host.rsplit(":", 1)[0]
+    return f"ipp://{host}:631/{path}"
+
+
+def run_ipptool(uri, request, timeout=45):
+    """Runs one Get-Printer-Attributes request. Returns (exit code, output)."""
+    argv = ["ipptool", "-T", "10", "-t", uri, request]
+    try:
+        completed = subprocess.run(argv, timeout=timeout,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return completed.returncode, completed.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {timeout}s"
+    except Exception as e:
+        return None, str(e)
+
+
+def check_ipp(d, uri):
+    """Asks the printer for its attributes, retrying without TLS on failure."""
+    import printer_capabilities
+    title = f"IPP get-printer-attributes on {uri}"
+    if not shutil.which("ipptool"):
+        d.check(title, False, "'ipptool' is not installed (package cups-ipp-utils)",
+                optional=True)
+        return
+    request = printer_capabilities.request_file()
+    code, output = run_ipptool(uri, request)
+    detail = f"exit code {code}" if code is not None else output
+    if code == 0 and "PASS" in output:
+        d.check(title, True, detail, f"$ ipptool -t {uri} {request}\n{output}")
+        return
+
+    fallback = plain_ipp_uri(uri)
+    if fallback:
+        f_code, f_output = run_ipptool(fallback, request)
+        if f_code == 0 and "PASS" in f_output:
+            d.check(title, False,
+                    f"{detail} over TLS, but {fallback} answers - only the "
+                    f"encrypted connection fails",
+                    f"$ ipptool -t {uri} {request}\n{output}\n"
+                    f"$ ipptool -t {fallback} {request}\n{f_output}",
+                    optional=True)
+            return
+        output = (f"$ ipptool -t {uri} {request}\n{output}\n"
+                  f"$ ipptool -t {fallback} {request}\n{f_output}")
+    else:
+        output = f"$ ipptool -t {uri} {request}\n{output}"
+    d.check(title, False, detail, output)
+
+
 def phase_printer(d):
     """The physical printer over IPP."""
     c = config.get_config()
@@ -375,8 +439,7 @@ def phase_printer(d):
         d.check("hardware.printer_uri configured", False)
         return
     if uri.startswith(("ipp://", "ipps://")):
-        d.command(["ipptool", "-t", uri, "get-printer-attributes.test"],
-                  f"IPP get-printer-attributes on {uri}", timeout=45, expect="PASS")
+        check_ipp(d, uri)
     else:
         # A socket or file backend (for example the virtual printer of the test
         # container) does not speak IPP, so there is nothing to query.

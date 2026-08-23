@@ -23,8 +23,13 @@ ATTRIBUTES_REQUEST = """{
 """
 
 
-def _request_file():
-    """The ipptool request used to ask the printer what it can do."""
+def request_file():
+    """The ipptool request used to ask the printer what it can do.
+
+    ipptool resolves a bare 'get-printer-attributes.test' relative to the
+    current directory, so the self-test and every probe pass this absolute path
+    instead of relying on the test files shipped with the CUPS data package.
+    """
     path = os.path.join(config.TEMP_DIR, "get-printer-attributes.test")
     if not os.path.exists(path):
         with open(path, 'w') as f:
@@ -49,7 +54,7 @@ def probe(uri, force=False):
 
     attributes = {}
     try:
-        result = subprocess.run(["ipptool", "-tv", uri, _request_file()],
+        result = subprocess.run(["ipptool", "-tv", uri, request_file()],
                                 capture_output=True, text=True, timeout=20)
         for line in (result.stdout or "").splitlines():
             if "=" not in line or "(" not in line:

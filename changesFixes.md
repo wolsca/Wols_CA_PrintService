@@ -116,11 +116,20 @@ empties this file again, so it always describes only the *unreleased* work.
   `off` (default) keeps the current behaviour.
 - The `printer` self-test phase reports who confirms the flip and why, and the administrator editor
   offers the three new settings.
+- The self-test card in the web app has a **Copy report** button, so the whole report can be pasted
+  somewhere else instead of being selected by hand while the page refreshes. It uses the clipboard
+  API on a secure origin and falls back to a hidden textarea (and, as a last resort, selecting the
+  report and asking for Ctrl+C), because the web app is normally reached over plain `http`. The
+  report text is also only rewritten when it really changed, so a selection survives the polling.
 
 ## Fixes
 
 - `installer.py` no longer aborts where there is no `apt-get` and no longer reports missing
   `systemctl` as an error, so `--install-printer` also runs inside a container.
+- `install.sh` makes every script in `deploy/debian` executable itself (`chmod +x .../*.sh`, right
+  after it resolved the repository root), so a checkout that lost the executable bit - Windows, a ZIP
+  download, a copy over SMB - no longer stops at "Permission denied" on `fix-permissions.sh` or
+  `uninstall.sh`, and the manual `chmod +x deploy/debian/*.sh` step is no longer needed.
 - The output queue is only created driverless (`-m everywhere`) for IPP targets; a `socket:` or
   file backend now gets a raw queue, so the PDF is passed through unchanged instead of being
   rejected.
@@ -152,6 +161,16 @@ empties this file again, so it always describes only the *unreleased* work.
   (`WOLSCA_VIRTUAL_OUTPUT=1`) the `network` phase reports "MQTT client connected" as a warning,
   because the broker is not part of what is being released. On a real installation it stays a
   failure, since Home Assistant would get nothing.
+
+- The `printer` self-test could never pass its IPP query: it called
+  `ipptool -t <uri> get-printer-attributes.test` with a *bare* file name, which ipptool looks for in
+  the current working directory - so the step always ended with `exit code 1` before the printer was
+  even contacted (`FAIL IPP get-printer-attributes on ipps://...`). The phase now passes the absolute
+  path of the request file the service writes itself (`printer_capabilities.request_file()`, the same
+  one the capability probe uses) and gives ipptool an operation timeout (`-T 10`). When the `ipps://`
+  request fails, the same query is retried over `ipp://<host>:631/...`; if the printer answers there,
+  the step is a **warning** naming the TLS connection as the only problem instead of a failure, and
+  the command lines and output of both attempts are in the report.
 
 ## Known issue found with the new container
 
