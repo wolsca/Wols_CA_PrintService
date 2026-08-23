@@ -28,18 +28,18 @@
                 "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\booklet"
             },
             {
-                "id": "duplex",
+                "id": "doublesided",
                 "cups_queue": "WolsCA_DoubleSided",
                 "description": "Double sided (front and back)",
                 "print_mode": "DoubleSided",
-                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\duplex"
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\doublesided"
             },
             {
-                "id": "simplex",
+                "id": "singlesided",
                 "cups_queue": "WolsCA_SingleSided",
                 "description": "Single sided (one page per sheet)",
                 "print_mode": "SingleSided",
-                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\simplex"
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\singlesided"
             }
         ]
     },

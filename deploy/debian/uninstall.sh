@@ -64,8 +64,10 @@ PY
         [[ -d "${backend_dir}" ]] || continue
         find "${backend_dir}" -maxdepth 1 -name 'cups-pdf-*' -type l -delete || true
     done
-    rm -f /etc/cups/cups-pdf-booklet.conf /etc/cups/cups-pdf-duplex.conf \
-          /etc/cups/cups-pdf-simplex.conf
+    # The names up to 1.4 (duplex/simplex) are removed as well.
+    rm -f /etc/cups/cups-pdf-booklet.conf \
+          /etc/cups/cups-pdf-doublesided.conf /etc/cups/cups-pdf-singlesided.conf \
+          /etc/cups/cups-pdf-duplex.conf /etc/cups/cups-pdf-simplex.conf
     rm -rf "${CONFIG_DIR}" "${SPOOL_DIR}"
     userdel "${SERVICE_USER}" 2>/dev/null || true
 else

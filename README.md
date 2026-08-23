@@ -126,12 +126,17 @@ Instead of one intake queue, there are three shared CUPS queues. The queue a doc
 | Queue (visible printer) | Drop directory | Print mode | Result |
 | :--- | :--- | :--- | :--- |
 | **WolsCA_Booklet** | `.../PrintFileDrop/booklet` | Booklet | A5 booklet imposition on A4, flip halfway |
-| **WolsCA_DoubleSided** | `.../PrintFileDrop/duplex` | DoubleSided | Forced double sided, no imposition |
-| **WolsCA_SingleSided** | `.../PrintFileDrop/simplex` | SingleSided | Forced single sided, one page per sheet |
+| **WolsCA_DoubleSided** | `.../PrintFileDrop/doublesided` | DoubleSided | Forced double sided, no imposition |
+| **WolsCA_SingleSided** | `.../PrintFileDrop/singlesided` | SingleSided | Forced single sided, one page per sheet |
 
-The mode values are `Booklet`, `DoubleSided` and `SingleSided`. The older names
-`Duplex` and `Simplex` are still accepted and are converted automatically when
-the configuration is read, so an existing installation keeps working.
+The mode values are `Booklet`, `DoubleSided` and `SingleSided`, and the queue
+`id` (an internal key that names the drop directory and the cups-pdf instance
+`/etc/cups/cups-pdf-<id>.conf`) is `booklet`, `doublesided` and `singlesided`.
+The older names `Duplex`/`Simplex` and the old ids `duplex`/`simplex` are still
+accepted: the configuration is migrated and saved once when it is read, so an
+existing installation keeps working. Re-run `--install-printer` afterwards, so
+the cups-pdf instances follow the new names; the old drop directories can then
+be removed.
 
 ---
 

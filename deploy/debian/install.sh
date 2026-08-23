@@ -176,7 +176,7 @@ for dir in PrintFileDrop PrintTemp PrintError; do
     install -d -o "${SERVICE_USER}" -g lp -m 2775 "${SPOOL_DIR}/${dir}"
 done
 # One drop directory per visible print queue
-for dir in booklet duplex simplex; do
+for dir in booklet doublesided singlesided; do
     install -d -o "${SERVICE_USER}" -g lp -m 2775 "${SPOOL_DIR}/PrintFileDrop/${dir}"
 done
 chown "${SERVICE_USER}:lp" "${SPOOL_DIR}"

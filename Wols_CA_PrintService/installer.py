@@ -23,7 +23,9 @@ def intake_queues():
         return []
     queues = []
     for entry in section.get("queues", []):
-        q_id = str(entry.get("id") or entry.get("cups_queue") or "").strip()
+        # Lower case, so a capitalised id in the configuration can never split
+        # the cups-pdf instances (the backend name derives from it).
+        q_id = config.normalize_intake_id(str(entry.get("id") or entry.get("cups_queue") or "").strip())
         if not q_id: continue
         mode = str(entry.get("print_mode", "Booklet"))
         directory = str(entry.get("directory", "")).strip() or os.path.join(config.DROP_DIR, q_id)
@@ -165,7 +167,7 @@ def ensure_cups_pdf_instance(queue_entry):
         print("[Warning] cups-pdf backend not found; using shared output directory.")
         return "cups-pdf:/"
 
-    suffix = queue_entry["id"]
+    suffix = queue_entry["id"].lower()
     instance = os.path.join(backend_dir, f"cups-pdf-{suffix}")
     try:
         if not os.path.exists(instance):

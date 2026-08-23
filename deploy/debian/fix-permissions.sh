@@ -125,7 +125,7 @@ apply_dir "${SPOOL_DIR}" 2775
 for name in PrintFileDrop PrintTemp PrintError; do
     apply_dir "${SPOOL_DIR}/${name}" 2775
 done
-for name in booklet duplex simplex; do
+for name in booklet doublesided singlesided; do
     apply_dir "${SPOOL_DIR}/PrintFileDrop/${name}" 2775
 done
 

@@ -73,8 +73,16 @@ empties this file again, so it always describes only the *unreleased* work.
   is gone.
 - The print modes are named after the result: `Duplex` became **`DoubleSided`** and `Simplex`
   became **`SingleSided`** ("duplex" means two directions, the mode means two sides). `Booklet` is
-  unchanged, and so are the CUPS queue names and the intake directories. `config.normalize_print_mode()`
-  still accepts the old names, and `settings.print_mode` now defaults to `DoubleSided`.
+  unchanged, and so are the CUPS queue names. `config.normalize_print_mode()` still accepts the old
+  names, and `settings.print_mode` now defaults to `DoubleSided`.
+- The last places still called `duplex`/`simplex` are renamed as well: the intake queue **ids** and
+  the drop directories are now `booklet`, `doublesided` and `singlesided` (so also the cups-pdf
+  instances `/etc/cups/cups-pdf-doublesided.conf` and `-singlesided.conf`). New
+  `config.normalize_intake_id()` migrates an existing configuration once - id, print mode and, only
+  when it still carries an old name of that queue, the directory - and saves the result, so the file
+  no longer keeps showing the old names. A path chosen by hand is left alone, `installer.py`
+  lower-cases the id when it derives the backend name (a capitalised id could otherwise split the
+  cups-pdf instances), and `uninstall.sh --purge` removes the old and the new `cups-pdf-*.conf`.
 - **Push notifications are implemented at last** and are on by default: the `notify` section
   existed but nothing ever sent a message. New `Wols_CA_PrintService/notifier.py` (standard library
   only, ntfy) pings the phone when the front side is printed and the paper has to be flipped - with

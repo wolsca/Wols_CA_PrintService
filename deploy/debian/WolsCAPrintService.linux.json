@@ -33,18 +33,18 @@
                 "directory": "/var/spool/wolsca/PrintFileDrop/booklet"
             },
             {
-                "id": "duplex",
+                "id": "doublesided",
                 "cups_queue": "WolsCA_DoubleSided",
                 "description": "Double sided (front and back)",
                 "print_mode": "DoubleSided",
-                "directory": "/var/spool/wolsca/PrintFileDrop/duplex"
+                "directory": "/var/spool/wolsca/PrintFileDrop/doublesided"
             },
             {
-                "id": "simplex",
+                "id": "singlesided",
                 "cups_queue": "WolsCA_SingleSided",
                 "description": "Single sided (one page per sheet)",
                 "print_mode": "SingleSided",
-                "directory": "/var/spool/wolsca/PrintFileDrop/simplex"
+                "directory": "/var/spool/wolsca/PrintFileDrop/singlesided"
             }
         ]
     },

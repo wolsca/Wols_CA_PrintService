@@ -39,6 +39,14 @@ PRINT_MODE_ALIASES = {
     "singlesided": "SingleSided",
 }
 
+# The intake queue id is an internal key: it names the cups-pdf instance
+# (/etc/cups/cups-pdf-<id>.conf) and the drop directory. Up to and including
+# version 1.4 these were 'duplex' and 'simplex', so both are translated.
+INTAKE_ID_ALIASES = {
+    "duplex": "doublesided",
+    "simplex": "singlesided",
+}
+
 def normalize_print_mode(value):
     """Maps an old or differently cased mode name onto its current name."""
     if not value:
@@ -46,14 +54,46 @@ def normalize_print_mode(value):
     text = str(value).strip()
     return PRINT_MODE_ALIASES.get(text.lower(), text)
 
+def normalize_intake_id(value):
+    """Maps an old or differently cased queue id onto its current id."""
+    if not value:
+        return value
+    text = str(value).strip().lower()
+    return INTAKE_ID_ALIASES.get(text, text)
+
 def normalize_print_modes():
-    """Rewrites the modes of a configuration written by an older version."""
+    """Rewrites the modes and queue ids of a configuration written by an older version.
+
+    Returns True when something was renamed, so the caller can write the
+    migrated configuration back - otherwise the old names keep showing up in the
+    file even though the service works with the new ones.
+    """
+    changed = False
     settings = config_data.get("settings", {})
     if settings.get("print_mode"):
-        settings["print_mode"] = normalize_print_mode(settings["print_mode"])
+        migrated = normalize_print_mode(settings["print_mode"])
+        changed = changed or migrated != settings["print_mode"]
+        settings["print_mode"] = migrated
     for q_entry in config_data.get("intake", {}).get("queues", []):
         if q_entry.get("print_mode"):
-            q_entry["print_mode"] = normalize_print_mode(q_entry["print_mode"])
+            migrated = normalize_print_mode(q_entry["print_mode"])
+            changed = changed or migrated != q_entry["print_mode"]
+            q_entry["print_mode"] = migrated
+        old_id = str(q_entry.get("id") or "").strip()
+        new_id = normalize_intake_id(old_id)
+        if new_id and new_id != old_id:
+            q_entry["id"] = new_id
+            changed = True
+            # The drop directory is named after the id; only rewrite it when it
+            # carries an old name of this queue ('duplex', 'Simplex', ...), never
+            # a path the user chose himself.
+            # The last segment is replaced textually, so a Linux path keeps its
+            # forward slashes even when the migration runs on Windows.
+            directory = str(q_entry.get("directory") or "").rstrip("/\\")
+            tail = os.path.basename(directory.replace("\\", "/"))
+            if tail and normalize_intake_id(tail) == new_id:
+                q_entry["directory"] = directory[:len(directory) - len(tail)] + new_id
+    return changed
 
 def load_or_create_config():
     """Loads the JSON configuration or creates it with defaults if it does not exist."""
@@ -108,14 +148,14 @@ def load_or_create_config():
                     "directory": ""
                 },
                 {
-                    "id": "duplex",
+                    "id": "doublesided",
                     "cups_queue": "WolsCA_DoubleSided",
                     "description": "Double sided (two pages per sheet, front and back)",
                     "print_mode": "DoubleSided",
                     "directory": ""
                 },
                 {
-                    "id": "simplex",
+                    "id": "singlesided",
                     "cups_queue": "WolsCA_SingleSided",
                     "description": "Single sided (one page per sheet)",
                     "print_mode": "SingleSided",
@@ -204,7 +244,9 @@ def load_or_create_config():
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
 
-                normalize_print_modes()
+                if normalize_print_modes():
+                    print("[System] Print modes and intake queue ids migrated to the current names.")
+                    save_config()
         except Exception as e:
             print(f"[Error] Failed to read JSON config: {e}. Using defaults.")
             config_data = default_config
