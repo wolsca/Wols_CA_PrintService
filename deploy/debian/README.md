@@ -129,6 +129,102 @@ Edit `/etc/wolsca/WolsCAPrintService.json` (MQTT broker/credentials, the physica
 sudo systemctl restart wolsca-print-service
 ```
 
+### Configuration version and automatic upgrades
+
+The configuration file carries its own version in `config_version` (currently **1.1.b**) - the
+version of the *file*, not of the service. At every start-up the service compares it with the version
+it expects and runs only the upgrade steps that are still missing, one after another:
+
+* a file **without** `config_version` was written before versioning existed and counts as **1.0**;
+* a step may carry a letter, which makes it a sub-step of that version: `1.1` < `1.1.a` < `1.1.b` <
+  `1.2`, so a field can be added to a version that already exists without repeating its other work;
+* every step is applied exactly once - a jump from 1.0 to a future 1.3 runs everything in between in
+  order, and a file that is already up to date is not touched at all;
+* an upgrade only **adds** the new fields; a value you set yourself is never overwritten, and the
+  file is rewritten only when something really changed (`[Config] Upgrading configuration 1.0 ->
+  1.1.b...` in the journal names every field it added).
+
+| Version | What the upgrade does |
+| --- | --- |
+| 1.0 | The original file, without a version key |
+| 1.1.a | Adds `hardware.wake_on_lan`, `hardware.printer_mac`, `hardware.wake_broadcast` and `hardware.wait_for_printer_seconds`, and fills in the MAC address of the printer itself when it can be read from the network |
+| 1.1.b | Adds `hardware.printer_mac_wired`, `hardware.printer_mac_wifi`, `hardware.recover_printer_ip` and `hardware.block_on_mac_change` (the known address becomes the wired one), and gives every intake queue its own `printer` |
+
+The MAC address is looked up over the network during that upgrade: the printer is contacted first
+(that is what creates the ARP entry) and the neighbour table of the server is then read, so
+`hardware.printer_mac` is usually filled in without typing anything. It only works while the printer
+is awake and on the same subnet - a sleeping printer has no ARP entry left, which is exactly why the
+address has to be in the file *before* it falls asleep. Was it empty after the upgrade, switch the
+printer on and restart the service, or fill it in by hand (see below).
+
+`main.py --self-test admin` shows the version of the file that is in use.
+
+### One printer per intake queue
+
+Booklet, double sided and single sided do not have to end up on the same machine. Every intake queue
+has its own `printer`, which names one of the ids in `printers.targets`:
+
+```json
+"queues": [
+    { "id": "booklet", "cups_queue": "WolsCA_Booklet", "print_mode": "Booklet", "printer": "office" },
+    { "id": "doublesided", "cups_queue": "WolsCA_DoubleSided", "print_mode": "DoubleSided", "printer": "" }
+]
+```
+
+It is a choice only when there is something to choose: **empty** means the default printer, and with
+a single configured printer that printer is simply used. A personal choice made in the web app still
+wins for `personal_choice_ttl_seconds`. The configuration editor of the web app (and Home Assistant)
+shows one *Printer for ...* drop down per queue, and the `printer:` line of the job log says which
+of the three decided - `personal`, `intake queue 'booklet'` or `default`.
+
+### Finding the printers on the network
+
+The *Administrator* card of the web app has a drop down of the printers that support IPP, filled by
+**Search for printers**:
+
+* everything that announces itself over mDNS/Bonjour as `_ipp._tcp` or `_ipps._tcp` (every
+  driverless/AirPrint printer does), and
+* everything that answers on port 631 in the subnet of the server, because a printer with mDNS
+  switched off announces nothing at all.
+
+Each entry shows the name, the address, the port and the MAC address that belongs to it. **Use the
+selected printer** takes all of that over at once - `hardware.printer_uri`, the host of the target
+and the MAC address - so a new or replaced printer is configured without typing an address. The same
+list is in the self-test: `main.py --self-test network`.
+
+### Keeping the printer MAC address correct
+
+The MAC address is not filled in once and then forgotten - it is checked whenever the printer is
+found on the network, because a replaced printer, a new network card or a move from cable to Wi-Fi
+gives a different address, and a magic packet to the old one wakes nothing without complaining:
+
+* at **start-up**, in the background, so a sleeping printer never delays the service;
+* **before every print job** for which the printer is checked;
+* in the **self-test**: `main.py --self-test printer` reports *Printer MAC address verified*,
+  *... switched to the other interface*, *... detected and saved*, *... corrected*, *... unknown* or
+  *... not verifiable*, and *Another MAC address than configured - has the printer changed?* when it
+  belongs to neither interface.
+
+There are three addresses, and each has its own job:
+
+| Address | Where it comes from | What it is for |
+| --- | --- | --- |
+| `hardware.printer_mac_wired` | The printer itself (network page, or the sticker) | The cable interface |
+| `hardware.printer_mac_wifi` | The printer itself | The Wi-Fi interface - a *different* address |
+| `hardware.printer_mac` | The service, from the network | The address that answers **now**: it is woken, and it is what the printer is recognised by |
+
+Filling in both means the printer stays known when it moves between cable and Wi-Fi (the working
+address is switched over silently) and that it can be found again after its DHCP address changed. An
+address that matches neither is the interesting case: then something else is answering where the
+printer used to be, so it is reported and - with `hardware.block_on_mac_change` on - the job is
+stopped rather than printed on an unknown machine.
+
+A missing address is filled in and a changed address is corrected in
+`/etc/wolsca/WolsCAPrintService.json` on the spot; `journalctl -u wolsca-print-service | grep
+'\[Power\]'` shows what happened. The address can only be read while the printer is awake **and** on
+the same subnet - with a router in between the neighbour table stays empty and the address has to
+come from the printer's own network page.
+
 ### MQTT Broker Accounts
 
 The default broker account name is `wolsca_mqtt`. When a Debian server and a Home
@@ -136,6 +232,48 @@ Assistant add-on share one broker, create **both** accounts in Home Assistant's
 Mosquitto (e.g. `wolsca_mqtt` and `wolsca_mqtt_ha`). A Debian-only installation
 needs only `wolsca_mqtt`, created either in Home Assistant's Mosquitto or in
 EMQX/Mosquitto on the server itself.
+
+### The printer is switched off or asleep
+
+A printer that sleeps or is switched off answers on no port at all - the self-test then shows
+`ipptool: Unable to connect ... Host is down` and a ping that loses every packet. That is a correct
+observation, not a broken installation, so it is only a **warning** and a print job is never thrown
+away because of it: before the job is handed over the service checks whether the printer is on the
+network, otherwise the job goes to *Waiting for the printer to come online* and continues by itself
+as soon as the printer answers.
+
+| Setting | Meaning |
+| --- | --- |
+| `hardware.wait_for_printer_seconds` | How long a job waits for the printer (default 900 s; `0` = do not wait, fail immediately) |
+| `hardware.printer_mac` | The MAC address that is **in use** now, e.g. `00:1b:a9:12:34:56`. Filled in and kept correct by the service itself |
+| `hardware.printer_mac_wired` | The MAC address of the **cable** interface of the printer, as printed on the printer itself |
+| `hardware.printer_mac_wifi` | The MAC address of the **Wi-Fi** interface - a different address than the cable one |
+| `hardware.recover_printer_ip` | Look the printer up by MAC address when it does not answer on the configured address any more (on by default) |
+| `hardware.block_on_mac_change` | Stop a job when the machine answering at the printer's address has an unknown MAC address (on by default) |
+| `hardware.wake_on_lan` | Send a Wake-on-LAN packet before waiting (on by default; it does nothing while `printer_mac` is empty) |
+| `hardware.wake_broadcast` | Where the packet is sent, default `255.255.255.255` (use the broadcast address of the printer's subnet when the server is elsewhere) |
+
+#### Why the MAC address is needed
+
+A Wake-on-LAN packet is a *magic packet*: an Ethernet frame that contains nothing but the MAC
+address of the machine that has to wake up. There is no IP address in it - a sleeping printer has
+switched off its IP stack and no longer answers ARP, so its IP address cannot be translated into a
+MAC address at that moment either. The MAC address therefore has to be known **beforehand**, and
+that is why it belongs in the configuration. Wake-on-LAN also has to be enabled in the printer's
+own network settings, and a printer whose power switch is off can never be woken this way - then
+only waiting helps.
+
+The address is on the network/status page of the printer, and the self-test hands it to you while
+the printer is awake:
+
+```bash
+ip neigh show 192.168.101.251        # 192.168.101.251 dev eth0 lladdr 00:1b:a9:12:34:56 REACHABLE
+... main.py --self-test printer       # the 'Waking the printer' line reports the detected MAC
+```
+
+Fill it in as *Printer MAC address* in the configuration editor of the web app (or in Home
+Assistant) and the service wakes the printer at the start of every job it has to wait for, and
+again every minute for as long as it waits.
 
 ### Key Configuration Sections
 
@@ -250,6 +388,17 @@ server - it is what the *Update now* button uses.
 
 | Symptom | Check |
 | --- | --- |
+| Self-test or job log: `has the printer been changed, or is another device using this IP address?` | The MAC address answering at the printer's address is neither `hardware.printer_mac_wired` nor `..._wifi`. With `hardware.block_on_mac_change` on (the default) the job is stopped instead of printed on an unknown device: check which machine is on that address and, when it really is the printer, fill in its address |
+| Printing stops with `The printer was not recognised` | Same cause as above. Correct the wired/Wi-Fi address, or switch `hardware.block_on_mac_change` off to print anyway |
+| The printer got another IP address (DHCP) | Nothing to do: with `hardware.recover_printer_ip` on the printer is looked up by its MAC address and `hardware.printer_uri` plus the target host are corrected. It only works with a MAC address filled in and the printer on the same subnet |
+| The printer was moved from cable to Wi-Fi | Fill in both `hardware.printer_mac_wired` and `hardware.printer_mac_wifi`; the service then only switches `hardware.printer_mac` over (self-test: *Printer MAC address switched to the other interface*) instead of warning |
+| No printer in the *Search for printers* drop down | The printer must be switched on and in the subnet of the server. Check `avahi-browse -rt _ipp._tcp` and whether port 631 answers (`nc -z <printer-ip> 631`); a printer behind a router is not found |
+| A queue prints on the wrong printer | `intake.queues[].printer` (*Printer for ...* in the web app) wins over the default printer, and a personal choice in the web app wins over that; the `printer:` line of the job log names the source |
+| The self-test report can only be screenshotted | Use *Copy report*, or *Open report as plain text* (`http://<host>:8080/api/diagnostics/report.txt`) and select everything there |
+| `hardware.printer_mac` is still empty after the upgrade | The printer was asleep or on another subnet, so it had no ARP entry. Switch the printer on and restart the service (the address is looked up again at start-up and before every job), or read it from `ip neigh show <printer-ip>` or the printer's network page |
+| Self-test: `Printer MAC address corrected` | The printer on the network has another MAC address than the configuration; the file has already been corrected. Expected after a printer replacement or a switch between cable and Wi-Fi |
+| Self-test: `Printer MAC address unknown` | The printer answers but is not in the neighbour table - usually a router in between. Read the address from the printer's network page and fill it in by hand |
+| Configuration keys of a new version are missing | `main.py --self-test admin` reports the version of the file, and `journalctl -u wolsca-print-service \| grep '\[Config\]'` shows what the upgrade did. A `config_version` that stays behind means a migration failed - the reason is on the `[Config] Upgrade to ... failed` line |
 | No PDF in the drop directory | `journalctl -u cups -e`; verify `Out` in `/etc/cups/cups-pdf.conf` |
 | No notification arrives | Check `notify.enabled` and `notify.topic`; verify the server can reach the ntfy URL |
 | Progress bar stays at 0% | Real-time progress requires `dispatch: cups` and the `ipptool` command |
@@ -263,6 +412,9 @@ server - it is what the *Update now* button uses.
 | Printer not offered on the phone | `avahi-browse -rt _ipp._tcp`; the queue must be shared (`lpadmin -p WolsCA_Booklet -o printer-is-shared=true`) |
 | Wrong printer used | A personal choice from the web app wins for `personal_choice_ttl_seconds`; check `journalctl` for the `[Printers] Target:` line |
 | `Printer refused the connection` | The physical printer must accept raw port 9100 (JetDirect) |
+| Self-test: `Host is down` / `Printer answers on the network` warning | The printer is switched off or in deep sleep. This is only a warning: a print job waits for it (`hardware.wait_for_printer_seconds`) instead of failing. Fill in `hardware.printer_mac` to have it woken |
+| A job stays in *Waiting for the printer to come online* | Switch the printer on, or fill in `hardware.printer_mac` and enable Wake-on-LAN on the printer. After `hardware.wait_for_printer_seconds` (default 900) the job does fail |
+| Wake-on-LAN does not wake the printer | Enable WOL in the printer's network settings; check `hardware.printer_mac`, and set `hardware.wake_broadcast` to the broadcast address of the printer's subnet when the server is on another subnet. A printer switched off at its power switch cannot be woken |
 | Self-test: `IPP get-printer-attributes ... exit code 1` | Install `cups-ipp-utils` (`ipptool`). If the retry over `ipp://<host>:631/...` in the same step succeeds, only TLS fails - the printer's certificate or TLS version is rejected; set `hardware.printer_uri` to the `ipp://` address |
 | Files land in a per-user folder | Re-run `--install-printer`; cups-pdf `Out`/`AnonDirName` must be the drop directory |
 | Permission denied on the drop dir | `sudo /opt/wolsca-print-service/fix-permissions.sh`; the service user must be in group `lp` and the directory mode `2775` |

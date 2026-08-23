@@ -5,7 +5,8 @@
         "topic_prefix": "wols_ca/print_service",
         "discovery_prefix": "homeassistant",
         "user": "wolsca_mqtt",
-        "password": "DefaultPassword"
+        "password": "DefaultPassword",
+        "instance_id": ""
     },
     "paths": {
         "drop_directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop",
@@ -15,7 +16,18 @@
     "hardware": {
         "printer_uri": "ipps://192.168.101.251:443/ipp/print",
         "flip_instruction": "",
-        "flip_timeout_seconds": 1800
+        "flip_timeout_seconds": 1800,
+        "wake_on_lan": true,
+        "printer_mac": "",
+        "wake_broadcast": "255.255.255.255",
+        "wait_for_printer_seconds": 900,
+        "cups_queue_name": "WolsCA_Output",
+        "flip_confirmation": "auto",
+        "single_page_paper_change": "off",
+        "single_page_media_source": "manual",
+        "printer_mac_wired": "",
+        "printer_mac_wifi": "",
+        "recover_printer_ip": true
     },
     "intake": {
         "enabled": true,
@@ -25,21 +37,24 @@
                 "cups_queue": "WolsCA_Booklet",
                 "description": "Booklet (A5, fold in the middle)",
                 "print_mode": "Booklet",
-                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\booklet"
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\booklet",
+                "printer": ""
             },
             {
                 "id": "doublesided",
                 "cups_queue": "WolsCA_DoubleSided",
                 "description": "Double sided (front and back)",
                 "print_mode": "DoubleSided",
-                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\doublesided"
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\doublesided",
+                "printer": ""
             },
             {
                 "id": "singlesided",
                 "cups_queue": "WolsCA_SingleSided",
                 "description": "Single sided (one page per sheet)",
                 "print_mode": "SingleSided",
-                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\singlesided"
+                "directory": "C:\\ProgramData\\WolsCA\\PrintFileDrop\\singlesided",
+                "printer": ""
             }
         ]
     },
@@ -91,5 +106,17 @@
     },
     "settings": {
         "print_mode": "DoubleSided"
-    }
+    },
+    "update": {
+        "enabled": true,
+        "repository": "wolsca/Wols_CA_PrintService",
+        "branch": "main",
+        "channel": "release",
+        "allow_test_builds": true,
+        "check_interval_hours": 6,
+        "auto_update": false,
+        "source_directory": "/usr/local/src/wolsca-print-service",
+        "update_command": ""
+    },
+    "config_version": "1.1.b"
 }

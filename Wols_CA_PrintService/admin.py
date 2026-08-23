@@ -53,6 +53,18 @@ FIELDS = [
     {"key": "hardware.flip_instruction", "label": "Flip instruction", "type": "text"},
     {"key": "hardware.flip_timeout_seconds", "label": "Flip timeout (s)", "type": "number",
      "min": 60, "max": 86400},
+    {"key": "hardware.wake_on_lan", "label": "Wake the printer (WOL)", "type": "bool"},
+    {"key": "hardware.printer_mac", "label": "Printer MAC address (in use)", "type": "text"},
+    {"key": "hardware.printer_mac_wired", "label": "Printer MAC address (cable)",
+     "type": "text"},
+    {"key": "hardware.printer_mac_wifi", "label": "Printer MAC address (Wi-Fi)",
+     "type": "text"},
+    {"key": "hardware.recover_printer_ip", "label": "Find the printer by MAC address",
+     "type": "bool"},
+    {"key": "hardware.block_on_mac_change", "label": "Stop printing on an unknown MAC address",
+     "type": "bool"},
+    {"key": "hardware.wait_for_printer_seconds", "label": "Wait for the printer (s)",
+     "type": "number", "min": 0, "max": 86400},
     {"key": "mqtt.broker_ip", "label": "MQTT broker", "type": "text"},
     {"key": "mqtt.broker_port", "label": "MQTT port", "type": "number", "min": 1, "max": 65535},
     {"key": "notify.enabled", "label": "Notifications", "type": "bool"},
@@ -76,6 +88,11 @@ FIELDS_BY_KEY = {field["key"]: field for field in FIELDS}
 
 SERVICE_NAME = "wolsca-print-service"
 
+# The printer of an intake queue is not a fixed key but one per queue, so those
+# fields are built from the configuration itself: 'queue.booklet' and friends.
+QUEUE_PREFIX = "queue."
+DEFAULT_CHOICE = "(default printer)"
+
 state = {
     "restart_required": False,
     "last_saved": None,
@@ -91,9 +108,84 @@ def entity_id(key):
     return key.replace(".", "_")
 
 
+def intake_queues():
+    return config.get_config().get("intake", {}).get("queues") or []
+
+
+def printer_options():
+    """The printers a queue can be sent to, '(default printer)' first."""
+    targets = config.get_config().get("printers", {}).get("targets") or []
+    options = [DEFAULT_CHOICE]
+    for target in targets:
+        identifier = str(target.get("id") or target.get("host") or "").strip()
+        if identifier and identifier not in options:
+            options.append(identifier)
+    return options
+
+
+def queue_fields():
+    """One printer choice per intake queue (booklet, double sided, single sided).
+
+    With a single printer there is nothing to choose and the queue simply uses
+    it; the drop down only becomes useful once a second printer is configured,
+    which is why the list is built from the configuration every time.
+    """
+    options = printer_options()
+    fields = []
+    for entry in intake_queues():
+        identifier = str(entry.get("id") or "").strip()
+        if not identifier:
+            continue
+        fields.append({
+            "key": QUEUE_PREFIX + identifier,
+            "label": f"Printer for {entry.get('description') or identifier}",
+            "type": "select",
+            "options": options
+        })
+    return fields
+
+
+def all_fields():
+    return FIELDS + queue_fields()
+
+
+def field_for(key):
+    field = FIELDS_BY_KEY.get(key)
+    if field:
+        return field
+    return next((f for f in queue_fields() if f["key"] == key), None)
+
+
+def queue_entry(identifier):
+    return next((q for q in intake_queues()
+                 if str(q.get("id") or "").strip() == identifier), None)
+
+
 def get_value(key):
+    if key.startswith(QUEUE_PREFIX):
+        entry = queue_entry(key[len(QUEUE_PREFIX):]) or {}
+        return str(entry.get("printer") or "").strip() or DEFAULT_CHOICE
     section, _, name = key.partition(".")
     return config.get_config().get(section, {}).get(name)
+
+
+def set_value(key, value):
+    """Stores one value; returns True when it really changed."""
+    if key.startswith(QUEUE_PREFIX):
+        entry = queue_entry(key[len(QUEUE_PREFIX):])
+        if entry is None:
+            return False
+        wanted = "" if value == DEFAULT_CHOICE else str(value)
+        if str(entry.get("printer") or "") == wanted:
+            return False
+        entry["printer"] = wanted
+        return True
+    section, _, name = key.partition(".")
+    target = config.get_config().setdefault(section, {})
+    if target.get(name) == value:
+        return False
+    target[name] = value
+    return True
 
 
 def coerce(field, value):
@@ -121,18 +213,102 @@ def coerce(field, value):
 def fields_payload():
     """The editable fields plus their current values, for the web app and HA."""
     entries = []
-    for field in FIELDS:
+    for field in all_fields():
         entry = dict(field)
         entry["value"] = get_value(field["key"])
         entries.append(entry)
     return {
         "fields": entries,
+        "discovery": discovery_payload(),
         "restart_required": bool(state["restart_required"]),
         "last_saved": state["last_saved"],
         "last_result": state["last_result"],
         "config_path": config.CONFIG_PATH,
         "service": SERVICE_NAME
     }
+
+
+# --- finding printers ---------------------------------------------------
+
+def discovery_payload():
+    """The printers found on the network, for the drop down in the web app."""
+    import printer_discovery
+    return printer_discovery.payload()
+
+
+def discover_printers():
+    """Scans the network for printers with IPP support."""
+    import printer_discovery
+    printers = printer_discovery.discover()
+    state["last_result"] = printer_discovery.state["detail"]
+    publish_state()
+    return {"printers": printers, "detail": state["last_result"]}
+
+
+def discover_async():
+    threading.Thread(target=discover_printers, daemon=True).start()
+
+
+def use_printer(host, publish=True):
+    """Points the service at one of the discovered printers.
+
+    Everything that identifies the printer is taken over at once: the URI it
+    answers on, the host of the physical target and its MAC address - the last
+    one because without it the printer can neither be woken nor found again
+    after a DHCP change.
+    """
+    import printer_discovery
+
+    wanted = str(host or "").strip()
+    entry = next((p for p in printer_discovery.state["printers"]
+                  if p.get("host") == wanted), None)
+    if not entry:
+        state["last_result"] = (f"'{wanted}' is not in the list of found printers - "
+                               f"scan for printers first")
+        if publish:
+            publish_state()
+        return {"saved": False, "errors": [state["last_result"]], "changed": [],
+                "restart_required": state["restart_required"]}
+
+    changed = []
+    c = config.get_config()
+    hardware = c.setdefault("hardware", {})
+    if hardware.get("printer_uri") != entry["uri"]:
+        hardware["printer_uri"] = entry["uri"]
+        changed.append("hardware.printer_uri")
+    mac = printer_discovery.normalize_mac(entry.get("mac"))
+    if mac:
+        if hardware.get("printer_mac") != mac:
+            hardware["printer_mac"] = mac
+            changed.append("hardware.printer_mac")
+        # A picked printer is a new printer: the address that was typed in for
+        # the old one may not stay behind and send magic packets into the void.
+        if not str(hardware.get("printer_mac_wired") or "").strip():
+            hardware["printer_mac_wired"] = mac
+            changed.append("hardware.printer_mac_wired")
+    targets = c.get("printers", {}).get("targets") or []
+    default_id = c.get("printers", {}).get("default")
+    target = next((t for t in targets if t.get("id") == default_id),
+                  targets[0] if targets else None)
+    if target is not None and target.get("host") != entry["host"]:
+        target["host"] = entry["host"]
+        changed.append(f"printers.targets[{target.get('id')}].host")
+
+    if changed:
+        backup_config()
+        config.save_config()
+        state["restart_required"] = True
+        state["changed"] = sorted(set(state["changed"]) | set(changed))
+        state["last_saved"] = datetime.now().isoformat(timespec="seconds")
+        state["last_result"] = (f"Printer '{entry.get('name')}' ({entry['host']}) is now "
+                               f"the printer of the service: {', '.join(changed)}.")
+    else:
+        state["last_result"] = f"'{entry.get('name')}' was already the configured printer."
+    print(f"[Admin] {state['last_result']}")
+    if publish:
+        publish_state()
+    return {"saved": bool(changed), "errors": [], "changed": changed,
+            "restart_required": state["restart_required"]}
 
 
 # --- access control -----------------------------------------------------
@@ -168,7 +344,7 @@ def apply_values(values, publish=True):
     prepared = {}
     errors = []
     for key, raw in (values or {}).items():
-        field = FIELDS_BY_KEY.get(key)
+        field = field_for(key)
         if not field:
             errors.append(f"{key}: not editable")
             continue
@@ -186,12 +362,8 @@ def apply_values(values, publish=True):
                 "restart_required": state["restart_required"]}
 
     changed = []
-    c = config.get_config()
     for key, value in prepared.items():
-        section, _, name = key.partition(".")
-        target = c.setdefault(section, {})
-        if target.get(name) != value:
-            target[name] = value
+        if set_value(key, value):
             changed.append(key)
 
     if changed:
@@ -278,7 +450,7 @@ def publish_state():
     """Publishes every field value plus the restart flag."""
     import mqtt_service
     try:
-        for field in FIELDS:
+        for field in all_fields():
             value = get_value(field["key"])
             if field["type"] == "bool":
                 text = "ON" if value else "OFF"
@@ -305,7 +477,7 @@ def handle_command(command_topic, payload):
     prefix = topic("set/")
     if command_topic.startswith(prefix):
         entity = command_topic[len(prefix):]
-        for field in FIELDS:
+        for field in all_fields():
             if entity_id(field["key"]) == entity:
                 apply_values({field["key"]: payload})
                 return True
@@ -319,7 +491,7 @@ def publish_ha_discovery():
     import mqtt_service
 
     device = device_info()
-    for field in FIELDS:
+    for field in all_fields():
         eid = entity_id(field["key"])
         common = {
             "name": mqtt_service.entity_name(field["label"]),

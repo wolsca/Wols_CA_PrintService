@@ -6,6 +6,7 @@ import shutil
 import config
 import job_log
 import mqtt_service
+import printer_power
 
 class JobCancelled(Exception):
     """Raised when the running job is cancelled by the user or a timeout."""
@@ -426,6 +427,89 @@ def dispatch_via_cups(pdf_path, target, copies, duplex, total_sheets, side, side
                             f"{last_reported if last_reported >= 0 else 0} of {expected} sheet(s)",
                  queue_state=reason)
 
+def ensure_printer_available(target, side=None, shutdown_event=None):
+    """Waits (and wakes) until the printer is on the network.
+
+    A printer that is asleep or switched off is not a failure of the service, so
+    the job is not thrown away: the state becomes WAITING_FOR_PRINTER, a
+    Wake-on-LAN packet is sent when the MAC address is known, and the job
+    continues by itself as soon as the printer answers.
+    """
+    uri = str(config.get_config().get("hardware", {}).get("printer_uri", "")).strip()
+    network_uri = uri.startswith(("ipp://", "ipps://", "socket://", "http://", "https://"))
+    if not network_uri and target.get("dispatch") != "raw":
+        # The virtual printer of the test container writes to a file backend, so
+        # the physical printer is not part of the path and probing it says
+        # nothing about this job.
+        return
+
+    ready, where = printer_power.reachable(target)
+    if ready:
+        job_log.step("printer_ready", f"The printer answers on {where}")
+        check_printer_identity(target)
+        return
+
+    job_log.warn("printer_offline", "The printer does not answer, so the job waits for it "
+                                    "instead of failing",
+                 tried=where, wake=printer_power.describe(target),
+                 wait_seconds=printer_power.wait_seconds())
+    mqtt_service.set_state("WAITING_FOR_PRINTER",
+                           "The printer is switched off or asleep - waiting for it.",
+                           side=side)
+    try:
+        import notifier
+        notifier.send("The printer does not answer. The job waits until the printer is "
+                      "back on the network.", title="Printer offline")
+    except Exception:
+        pass
+
+    def stop():
+        if shutdown_event is not None and shutdown_event.is_set():
+            return True
+        return mqtt_service.cancel_requested()
+
+    def announce(elapsed, remaining, wake_detail):
+        detail = (f"Waiting for the printer ({elapsed // 60} min, "
+                  f"{remaining // 60} min left)")
+        mqtt_service.set_state("WAITING_FOR_PRINTER", detail, side=side)
+        if elapsed and elapsed % 60 < printer_power.POLL_INTERVAL:
+            job_log.step("printer_offline", detail, wake=wake_detail)
+
+    ready, detail = printer_power.wait_until_reachable(target, on_wait=announce,
+                                                       should_stop=stop)
+    if mqtt_service.cancel_requested():
+        raise JobCancelled("Cancelled while waiting for the printer.")
+    if not ready:
+        job_log.error("printer_offline", f"The printer stayed unreachable: {detail}")
+        raise ValueError(f"The printer is not on the network: {detail}")
+
+    job_log.step("printer_ready", f"The printer is back on the network ({detail})")
+    check_printer_identity(target)
+
+
+def check_printer_identity(target):
+    """Is the machine that answers really our printer?
+
+    The printer is awake, so this is the only moment its MAC address can be read
+    from the network: an empty address is filled in (then a sleeping printer can
+    be woken later without anyone typing it in) and an address that belongs to
+    neither of the printer's interfaces stops the job when
+    `hardware.block_on_mac_change` is on - an IP address alone does not say
+    which device is listening on it.
+    """
+    learned = printer_power.learn_mac(target)
+    if learned:
+        job_log.step("printer_mac", f"Printer MAC {learned} detected and saved in "
+                                    f"hardware.printer_mac")
+        return
+    allowed, status, detail = printer_power.security_check(target)
+    if not allowed:
+        job_log.error("printer_mac", f"Unknown printer on the network: {detail}")
+        raise ValueError(f"The printer was not recognised: {detail}")
+    if status in ("unexpected", "switched", "corrected"):
+        job_log.warn("printer_mac", detail)
+
+
 def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
                             copies=1, duplex=False, total_sheets=0, sides=None, shutdown_event=None,
                             manual_duplex_sheets=0):
@@ -438,6 +522,10 @@ def dispatch_to_printer_ipp(pdf_path, print_mode_name, target, side=None,
     """
     if mqtt_service.cancel_requested():
         raise JobCancelled("Cancelled before printing started.")
+
+    # A printer that is off or asleep is waited for (and woken) first, so the job
+    # is never lost just because nobody switched the printer on yet.
+    ensure_printer_available(target, side, shutdown_event)
 
     mqtt_service.set_state("PRINTING", f"Dispatching {os.path.basename(pdf_path)} to {target['name']}",
                            side=side, sheets_done=0, printer_id=target["id"], printer_name=target["name"])

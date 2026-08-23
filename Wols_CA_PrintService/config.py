@@ -10,6 +10,15 @@ CONFIG_FILE = "WolsCAPrintService.json"
 SYSTEM_CONFIG_DIR = "/etc/wolsca"
 config_data = {}
 
+# Version of the *configuration file*, not of the service. A file without a
+# 'config_version' key was written before versioning existed and is therefore a
+# 1.0 file. Every step below is applied exactly once, in order, so an old file
+# is brought up to date field by field instead of being overwritten.
+# A step may carry a letter ('1.1.a', '1.1.b'): sub-steps of one release, which
+# keeps a step that is already published untouched while the next field is added.
+CONFIG_VERSION = "1.1.b"
+LEGACY_CONFIG_VERSION = "1.0"
+
 def resolve_config_path():
     """Config lookup order: $WOLSCA_CONFIG, /etc/wolsca (Linux), next to the script."""
     env_path = os.environ.get("WOLSCA_CONFIG")
@@ -95,11 +104,163 @@ def normalize_print_modes():
                 q_entry["directory"] = directory[:len(directory) - len(tail)] + new_id
     return changed
 
+def version_tuple(value):
+    """'1.10' -> (1, 10, 0), so 1.10 is newer than 1.2 and not 'smaller'.
+
+    A letter is a sub-step of that version: '1.1' < '1.1.a' < '1.1.b' < '1.2',
+    so 'a' counts as 1, 'b' as 2 and a version without a letter as 0.
+    """
+    parts = []
+    for part in str(value or LEGACY_CONFIG_VERSION).strip().lower().split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            letters = [ord(ch) - ord("a") + 1 for ch in part if "a" <= ch <= "z"]
+            parts.append(letters[0] if letters else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+def config_version():
+    """The version of the loaded file; a missing key means the original 1.0."""
+    return str(config_data.get("config_version") or LEGACY_CONFIG_VERSION).strip()
+
+def _fill_defaults(section, defaults):
+    """Adds the keys of a new version without touching an existing value."""
+    added = []
+    target = config_data.setdefault(section, {})
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = value
+            added.append(f"{section}.{key}")
+    return added
+
+def migrate_1_1_a(default_config):
+    """1.1.a - Wake-on-LAN, waiting for the printer and its MAC address.
+
+    A printer that is switched off or asleep may not cost a print job any more,
+    so `hardware.wake_on_lan`, `printer_mac`, `wake_broadcast` and
+    `wait_for_printer_seconds` are added. The MAC address cannot be guessed from
+    an IP address by a sleeping printer, but as long as it is still awake the
+    neighbour table of this host knows it - so it is looked up over the network
+    and filled in, which saves reading it from the printer's own status page.
+    """
+    notes = _fill_defaults("hardware", {
+        key: default_config["hardware"][key]
+        for key in ("wake_on_lan", "printer_mac", "wake_broadcast",
+                    "wait_for_printer_seconds")
+    })
+    if not str(config_data.get("hardware", {}).get("printer_mac") or "").strip():
+        detected = detect_printer_mac()
+        if detected:
+            config_data["hardware"]["printer_mac"] = detected
+            notes.append(f"hardware.printer_mac detected over the network: {detected}")
+        else:
+            notes.append("hardware.printer_mac stays empty - the printer did not answer, "
+                         "so its MAC address could not be read from the network")
+    return notes
+
+def migrate_1_1_b(default_config):
+    """1.1.b - one MAC address per interface, IP recovery and a printer per queue.
+
+    One address was not enough. A printer has a MAC address per interface, so a
+    printer moved from the cable to Wi-Fi answers with a different one:
+    `printer_mac_wired` and `printer_mac_wifi` hold what is printed on the
+    printer itself, `printer_mac` the address that answers right now. With those
+    known a printer that lost its DHCP address can be found again by MAC address
+    (`recover_printer_ip`), and an address that matches neither is reported
+    instead of silently accepted.
+
+    The same step gives every intake queue its own printer choice, so booklet,
+    double sided and single sided can each go to a different machine.
+    """
+    notes = _fill_defaults("hardware", {
+        key: default_config["hardware"][key]
+        for key in ("printer_mac_wired", "printer_mac_wifi", "recover_printer_ip",
+                    "block_on_mac_change")
+    })
+    hardware = config_data.setdefault("hardware", {})
+    working = str(hardware.get("printer_mac") or "").strip()
+    if working and not str(hardware.get("printer_mac_wired") or "").strip():
+        # The interface it answered on is unknown; a print server is normally
+        # cabled, so it is stored as the wired address. The Wi-Fi address has to
+        # come from the printer itself - that is the whole point of having both.
+        hardware["printer_mac_wired"] = working
+        notes.append(f"hardware.printer_mac_wired set to {working}; fill in "
+                     f"hardware.printer_mac_wifi from the printer itself to survive a "
+                     f"switch to Wi-Fi")
+    for q_entry in config_data.get("intake", {}).get("queues", []) or []:
+        if "printer" not in q_entry:
+            q_entry["printer"] = ""
+            notes.append(f"intake queue '{q_entry.get('id')}' can now choose its own "
+                         f"printer (empty = the default printer)")
+    return notes
+
+def detect_printer_mac():
+    """The MAC address of the configured printer, read from the network.
+
+    The printer is contacted first (that is what puts it in the ARP table) and
+    only then the table is read. Returns None when the printer does not answer.
+    """
+    try:
+        import printer_power
+    except Exception:
+        return None
+    try:
+        uri = str(config_data.get("hardware", {}).get("printer_uri", ""))
+        targets = config_data.get("printers", {}).get("targets") or [{}]
+        target = targets[0]
+        # Short timeout: this runs once during the upgrade at start-up and a
+        # printer that is off must not delay it.
+        printer_power.reachable(target, uri, timeout=1.5)
+        return printer_power.detect_mac(target=target, uri=uri)
+    except Exception:
+        return None
+
+# One entry per configuration version, in order. The steps of a version that the
+# file already has are skipped, so only the difference is applied.
+MIGRATIONS = (
+    ("1.1.a", migrate_1_1_a),
+    ("1.1.b", migrate_1_1_b),
+)
+
+def upgrade_config(default_config):
+    """Runs every migration newer than the version in the file.
+
+    Returns True when the file has to be written back. Called on every start, so
+    an installation that skips versions (1.0 straight to 1.3) still runs 1.1,
+    1.2 and 1.3 one after another.
+    """
+    current = config_version()
+    if version_tuple(current) >= version_tuple(CONFIG_VERSION):
+        # Nothing to do; only stamp a file that never carried a version.
+        if config_data.get("config_version") != CONFIG_VERSION:
+            config_data["config_version"] = CONFIG_VERSION
+            return True
+        return False
+
+    print(f"[Config] Upgrading configuration {current} -> {CONFIG_VERSION}...")
+    for version, migration in MIGRATIONS:
+        if version_tuple(version) <= version_tuple(current):
+            continue                      # already in the file, skip this step
+        try:
+            notes = migration(default_config) or []
+        except Exception as e:
+            print(f"[Config] Upgrade to {version} failed: {e}")
+            break
+        for note in notes:
+            print(f"[Config] {version}: {note}")
+        config_data["config_version"] = version
+        current = version
+        print(f"[Config] Configuration is now version {version}.")
+    return True
+
 def load_or_create_config():
     """Loads the JSON configuration or creates it with defaults if it does not exist."""
     global config_data
 
     default_config = {
+        "config_version": CONFIG_VERSION,
         "mqtt": {
             "broker_ip": "192.168.101.240",
             "broker_port": 1883,
@@ -135,7 +296,31 @@ def load_or_create_config():
             "single_page_paper_change": "off",
             "single_page_media_source": "manual",
             "flip_instruction": "",
-            "flip_timeout_seconds": 1800
+            "flip_timeout_seconds": 1800,
+            # A printer that is asleep or switched off answers nothing. That is
+            # not an error of the service: the job waits for it (0 disables the
+            # waiting) and, when the MAC address is known and the printer has
+            # Wake-on-LAN enabled, a magic packet is sent first.
+            "wake_on_lan": True,
+            # A printer has one MAC address per interface. The wired and the
+            # Wi-Fi address are both written down (they are on the printer
+            # itself), 'printer_mac' is the one that answers right now. Knowing
+            # both means a printer that is moved from the cable to Wi-Fi - or
+            # that got another DHCP address - is still found, and an address
+            # that matches neither is reported instead of silently accepted.
+            "printer_mac": "",
+            "printer_mac_wired": "",
+            "printer_mac_wifi": "",
+            # Look the printer up by MAC address when it does not answer on the
+            # configured address any more (a DHCP lease without a reservation).
+            "recover_printer_ip": True,
+            # Safety: an IP address does not say which machine answers on it. A
+            # MAC address that is neither the wired nor the Wi-Fi address of the
+            # printer means the document would be printed on an unknown device,
+            # so the job is stopped. Switch off to print anyway.
+            "block_on_mac_change": True,
+            "wake_broadcast": "255.255.255.255",
+            "wait_for_printer_seconds": 900
         },
         "intake": {
             "enabled": True,
@@ -145,21 +330,27 @@ def load_or_create_config():
                     "cups_queue": "WolsCA_Booklet",
                     "description": "Booklet (A5, fold in the middle)",
                     "print_mode": "Booklet",
-                    "directory": ""
+                    "directory": "",
+                    # Which physical printer this queue prints on (a target id).
+                    # Empty means: the default printer, or - when only one
+                    # printer is known - simply that one.
+                    "printer": ""
                 },
                 {
                     "id": "doublesided",
                     "cups_queue": "WolsCA_DoubleSided",
                     "description": "Double sided (two pages per sheet, front and back)",
                     "print_mode": "DoubleSided",
-                    "directory": ""
+                    "directory": "",
+                    "printer": ""
                 },
                 {
                     "id": "singlesided",
                     "cups_queue": "WolsCA_SingleSided",
                     "description": "Single sided (one page per sheet)",
                     "print_mode": "SingleSided",
-                    "directory": ""
+                    "directory": "",
+                    "printer": ""
                 }
             ]
         },
@@ -239,13 +430,23 @@ def load_or_create_config():
                     if section not in config_data:
                         config_data[section] = default_config[section]
 
-                # Fill in missing sub-keys to keep backward compatibility
+                changed = normalize_print_modes()
+                if changed:
+                    print("[System] Print modes and intake queue ids migrated to the current names.")
+
+                # The version driven upgrade runs before the defaults are filled
+                # in, so every step still sees the file as the older version
+                # wrote it and can decide what to do with a missing field.
+                if upgrade_config(default_config):
+                    changed = True
+
+                # Fill in missing sub-keys to keep backward compatibility - the
+                # safety net for a section a migration does not cover.
                 for section in ("mqtt", "hardware", "web", "notify", "history", "printers", "intake", "update"):
                     for key, value in default_config[section].items():
                         config_data[section].setdefault(key, value)
 
-                if normalize_print_modes():
-                    print("[System] Print modes and intake queue ids migrated to the current names.")
+                if changed:
                     save_config()
         except Exception as e:
             print(f"[Error] Failed to read JSON config: {e}. Using defaults.")

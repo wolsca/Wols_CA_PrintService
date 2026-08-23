@@ -113,7 +113,9 @@ def process_print_job(filepath, intake=None):
                   source=(intake or {}).get("cups_queue") or "drop folder",
                   path=filepath)
 
-    target, printer_source = web_app.resolve_target_printer()
+    # The intake queue may have a printer of its own, so booklet, double sided
+    # and single sided can each go to a different machine.
+    target, printer_source = web_app.resolve_target_printer(intake)
     options = web_app.resolve_job_options()
     web_app.consume_pending_options()
     mqtt_service.reset_job_control()
@@ -282,6 +284,28 @@ def job_worker():
                 known_paths.discard(os.path.abspath(filepath))
             job_queue.task_done()
 
+def verify_printer_mac():
+    """Checks the MAC address of the printer shortly after start-up.
+
+    A MAC address only changes when the printer does (a replacement, another
+    network card, cable swapped for Wi-Fi), and a magic packet to the old
+    address wakes nothing at all without saying so. Runs in its own thread,
+    because a printer that is asleep has to time out first.
+    """
+    try:
+        import printer_power
+    except Exception:
+        return
+    try:
+        status, detail = printer_power.verify_mac(printer_power.default_target())
+    except Exception as e:
+        print(f"[Power] Could not verify the printer MAC: {e}")
+        return
+    if status == "ok":
+        return                                   # nothing to report, all correct
+    print(f"[Power] Printer MAC check: {detail}")
+
+
 def start_service():
     for sig in (signal.SIGTERM, signal.SIGINT):
         try: signal.signal(sig, handle_termination)
@@ -294,6 +318,7 @@ def start_service():
     print(f"===================================================\n")
 
     job_log.load_history()
+    threading.Thread(target=verify_printer_mac, daemon=True).start()
     threading.Thread(target=installer.check_virtual_printer, daemon=True).start()
     mqtt_service.start_mqtt()
     httpd = web_app.start_web_app()

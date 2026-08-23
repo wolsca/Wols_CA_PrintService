@@ -6,6 +6,58 @@ empties this file again, so it always describes only the *unreleased* work.
 
 ## Changes
 
+- The configuration file now carries its own version (`config_version`, currently `1.1.b`) and is
+  upgraded step by step at start-up. A file without the key is a `1.0` file, the migrations newer
+  than the version in the file are run in order (so 1.0 straight to a future 1.3 still runs every
+  step in between) and already applied steps are skipped; a step may carry a letter, which makes it
+  a sub-step of that version (`1.1` < `1.1.a` < `1.1.b` < `1.2`). Step `1.1.a` adds
+  `hardware.wake_on_lan`, `printer_mac`, `wake_broadcast` and `wait_for_printer_seconds` and looks
+  the MAC address of the printer up over the network (the printer is contacted first, then the
+  neighbour table is read) so it does not have to be typed in by hand; step `1.1.b` adds
+  `printer_mac_wired`, `printer_mac_wifi`, `recover_printer_ip` and `block_on_mac_change` and gives
+  every intake queue its own `printer`. Values already in the file are never overwritten, the file
+  is only rewritten when something really changed, and the self-test reports the version of the
+  configuration in its `admin` phase.
+- **One MAC address per interface.** A printer has a different MAC address on the cable than on
+  Wi-Fi, so one address was not enough: `hardware.printer_mac_wired` and
+  `hardware.printer_mac_wifi` hold what is printed on the printer itself and `hardware.printer_mac`
+  is the *working* address, the one that answers now. A Wake-on-LAN packet is sent to every known
+  address (a sleeping printer does not say which interface will come up), an address that matches
+  the other interface simply switches the working one over, and an address that matches **neither**
+  is no longer adopted silently: the administrator is warned with *has the printer been changed, or
+  is another device using this IP address?*
+- **A printer that lost its DHCP address is found again** (`hardware.recover_printer_ip`, on by
+  default). Only the MAC address survives a lease that moved, so the neighbour table of the server
+  is searched for the known addresses (priming it first with one UDP datagram per address of the
+  subnet) and `hardware.printer_uri` plus the host of the target are rewritten to the address that
+  carries it. It runs before a job concludes that the printer is off and once a minute while a job
+  waits, so a printer with a plain DHCP address no longer needs a reservation.
+- **New safety switch `hardware.block_on_mac_change`** (on by default): an IP address does not say
+  *which* machine answers on it, so when the MAC address at the printer's address belongs to neither
+  of the printer's interfaces the job is stopped instead of printed on an unknown device. The job
+  log names the address, and switching the setting off prints anyway.
+- **The administrator can pick a printer from a list.** New `printer_discovery.py` asks
+  Avahi/Bonjour for `_ipp._tcp` and `_ipps._tcp` and additionally probes port 631 on the local
+  subnet (a printer with mDNS switched off announces nothing), and reports every printer with its
+  name, address, port and MAC address. The *Administrator* card of the web app has a drop down with
+  the found printers, a *Search for printers* and a *Use the selected printer* button - which takes
+  over the URI, the host of the target and the MAC address in one go - and the `network` self-test
+  phase lists the same printers.
+- **A printer per intake queue**: `intake.queues[].printer` sends booklet, double sided and single
+  sided each to their own printer, editable as *Printer for ...* in the web app and in Home
+  Assistant. Empty means the default printer, a single configured printer is simply used, and a
+  personal choice from the web app still wins; the job log says which of the three decided.
+- The self-test report can be opened as plain text (*Open report as plain text*,
+  `GET /api/diagnostics/report.txt`), so it can be selected and copied on any device - also over
+  plain HTTP, where the browser refuses the clipboard API - instead of being screenshotted.
+- The MAC address of the printer is kept correct by the service itself instead of being typed in
+  once: it is verified at start-up (in a background thread), before every print job for which the
+  printer is checked, and in the `printer` self-test phase (*Printer MAC address verified /
+  switched to the other interface / detected and saved / corrected / unknown / not verifiable*, plus
+  *Another MAC address than configured - has the printer changed?*). An empty `hardware.printer_mac`
+  is filled in and an address that no longer matches the printer on the network - a replacement,
+  another network card, cable swapped for Wi-Fi - is corrected in the configuration, because a magic
+  packet to the old address wakes nothing without reporting anything.
 - Updates offered through Home Assistant now only react to published GitHub releases; commit
   builds from the branch are only installed on request, with the *Check for test build* and
   *Install test build* buttons.
@@ -155,6 +207,27 @@ empties this file again, so it always describes only the *unreleased* work.
   logged when the job leaves it. At start-up every watched directory is logged with the queue and
   the print mode it belongs to.
 
+- **A printer that is switched off or asleep is no longer an error.** New
+  `Wols_CA_PrintService/printer_power.py` decides with a plain TCP connect (to the port of
+  `hardware.printer_uri`, the port of the target and 631/443/9100/80) whether the printer is on the
+  network at all. Before every dispatch the job waits for it - state `WAITING_FOR_PRINTER` in the
+  web app and Home Assistant, one job-log line per minute and one ntfy message - and continues by
+  itself as soon as the printer answers, up to `hardware.wait_for_printer_seconds` (default 900,
+  `0` switches the waiting off). Cancel and shutdown end the wait immediately.
+- **The printer can be woken over the network**: when `hardware.printer_mac` is filled in and the
+  printer has Wake-on-LAN enabled, a magic packet is sent to UDP port 9 (`hardware.wake_broadcast`,
+  default `255.255.255.255`) before waiting, and again every minute for as long as the job waits.
+  `hardware.wake_on_lan` switches this off. The MAC address is required because a Wake-on-LAN
+  packet carries nothing but the MAC - an IP address cannot be used for it, and a sleeping printer
+  no longer has an ARP entry to look it up from; a printer switched off at its power switch can
+  never be woken this way.
+- The `printer` self-test phase has a new **Printer answers on the network** step and a *Waking the
+  printer* line that explains what will happen; when `hardware.printer_mac` is empty it also prints
+  the MAC address it finds in the ARP table (`printer_power.detect_mac()` via `ip neigh`/`arp`)
+  while the printer is awake, ready to be pasted into the setting. `hardware.wake_on_lan`,
+  `hardware.printer_mac` and `hardware.wait_for_printer_seconds` are editable in the web app and in
+  Home Assistant.
+
 ## Fixes
 
 - `installer.py` no longer aborts where there is no `apt-get` and no longer reports missing
@@ -211,6 +284,10 @@ empties this file again, so it always describes only the *unreleased* work.
   request fails, the same query is retried over `ipp://<host>:631/...`; if the printer answers there,
   the step is a **warning** naming the TLS connection as the only problem instead of a failure, and
   the command lines and output of both attempts are in the report.
+- The same step no longer *fails* when the printer is simply not there. `ipptool: Unable to connect
+  to "..." on port 443 - Host is down` (with a ping that loses every packet) means the printer is
+  switched off or asleep, which is a correct observation and not a broken installation: the step is
+  now a **warning** stating that a print job waits for the printer instead of failing.
 
 ## Known issue found with the new container
 

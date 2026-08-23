@@ -18,6 +18,11 @@ The printer always wins: a document sent to **WolsCA_SingleSided** is printed
 single sided, even if the web app shows another mode. The mode chosen in the web
 app only applies to files you copy into the shared drop folder yourself.
 
+When there is more than one physical printer, the administrator can give each of
+these three its own machine - for example booklets on the office printer and
+single sided pages on the one next to your desk. A printer you pick yourself in
+the web app still wins for the next 15 minutes.
+
 ---
 
 ## How it works (booklet example)
@@ -140,9 +145,13 @@ A file copied into the top level of the drop folder uses the mode selected in th
 | **No notification arrives** | Check if the `ntfy` app is subscribed to the correct topic. Notifications are ENABLED by default; ensure `notify.enabled` has not been set to false. |
 | **Progress bar stays at 0%** | Real-time progress requires a CUPS-dispatched printer. Raw port 9100 transfers only show the active sheet. |
 | **Job stuck "Waiting for flip"** | Open the web app and press the **CONTINUE** button. Ensure you have re-inserted the paper correctly. |
+| **"Waiting for the printer to come online"** | The printer is switched off or in deep sleep. Switch it on and your job continues by itself - nothing is lost. If the printer supports Wake-on-LAN, the service wakes it: it reads the MAC address of the printer from the network by itself (and corrects it after a printer replacement), so nothing has to be filled in as long as the printer has been awake once. |
 | **Job cancelled itself** | Jobs are automatically cancelled after 30 minutes of waiting to prevent blocking the queue. |
+| **"The printer was not recognised"** | The machine answering at the printer's address is not the printer the administrator configured (its MAC address is a different one). For safety your document is not printed there - tell the administrator; it usually means the printer was replaced or another device took over its address. |
+| **The printer moved to another address** | Nothing to do: the service recognises the printer by its MAC address and corrects the address itself, so a printer that got a new address from the router is found again. |
 | **Second document does nothing** | The service prints jobs one by one. Check the web app to see if your job is in the waiting list. |
 | **Nothing comes out and you do not know why** | Open the **Job log** card in the web app: it shows every step of your job (which printer, which mode, what the printer answered) and where it stopped. *Copy job log* copies the whole thing so it can be sent to the administrator. |
+| **The administrator asks for the self-test report** | In the web app, *Run self-test* and then *Copy report*, or *Open report as plain text* - that page can be selected and copied on any device, so no screenshot is needed. |
 | **Only one printer shows up** | The other two queues were not created. The administrator has to run the installer again (CUPS and all queues are included by default) or restart the service, which creates missing queues itself. |
 | **Printed single sided although I chose Booklet in the web app** | You printed to the `WolsCA_SingleSided` printer. The printer you select in the print dialog always wins; use `WolsCA_Booklet` instead. |
 | **Blank pages at the end** | A booklet requires a multiple of 4 pages. If your document has 5 pages, 3 blank A5 sides will be added to complete the last sheet. |

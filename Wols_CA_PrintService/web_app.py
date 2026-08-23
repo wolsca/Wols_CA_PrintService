@@ -64,7 +64,34 @@ def default_printer():
     targets = printer_targets()
     return next((t for t in targets if t["id"] == configured), targets[0] if targets else None)
 
-def resolve_target_printer():
+def queue_printer(intake):
+    """The printer an intake queue prints on, or None.
+
+    Booklet, double sided and single sided may each have their own printer -
+    that is what `intake.queues[].printer` is for. It is only a choice when
+    there is something to choose: with a single printer the queue simply uses
+    it, and an id that no longer exists is ignored instead of failing the job.
+    """
+    if not intake:
+        return None
+    wanted = str(intake.get("printer") or "").strip()
+    if not wanted:
+        return None
+    targets = printer_targets()
+    target = next((t for t in targets if t["id"] == wanted), None)
+    if target:
+        return target
+    print(f"[Printers] Intake queue '{intake.get('id')}' asks for the unknown printer "
+          f"'{wanted}'; the default printer is used instead.")
+    return None
+
+def resolve_target_printer(intake=None):
+    """Which printer this job goes to, and why.
+
+    In order: a personal choice from the web app, then the printer of the intake
+    queue the file came from, and otherwise the default printer (which is the
+    only printer when just one is configured).
+    """
     with state_lock:
         printer_id = pending_choice["printer_id"]
         expires = pending_choice["expires"]
@@ -74,6 +101,12 @@ def resolve_target_printer():
         target = next((t for t in targets if t["id"] == printer_id), None)
         if target:
             return target, "personal"
+    from_queue = queue_printer(intake)
+    if from_queue:
+        return from_queue, f"intake queue '{intake.get('id')}'"
+    targets = printer_targets()
+    if len(targets) == 1:
+        return targets[0], "the only printer"
     return default_printer(), "default"
 
 def resolve_job_options():
@@ -171,6 +204,7 @@ input[type=text], input[type=password], input[type=number] { width: 100%; min-he
   <button class="ghost" id="runChainTest"></button>
   <button class="ghost" id="toggleTest"></button>
   <button class="ghost" id="copyTest"></button>
+  <button class="ghost" id="openTestText"></button>
   <p id="copyTestHint" class="muted"></p>
   <pre id="testReport" hidden></pre>
 </div>
@@ -194,6 +228,11 @@ input[type=text], input[type=password], input[type=number] { width: 100%; min-he
     <button class="ghost" id="adminUnlock"></button>
   </div>
   <div id="adminForm" hidden>
+    <p id="lblDiscovery" class="muted"></p>
+    <select id="printerFound"></select>
+    <button class="ghost" id="scanPrinters"></button>
+    <button class="ghost" id="usePrinter"></button>
+    <p id="discoveryDetail" class="muted"></p>
     <div id="adminFields"></div>
     <p id="adminDetail" class="muted"></p>
     <button id="adminSave"></button>
@@ -216,6 +255,8 @@ byId("runTest").textContent = T.selfTestRun || "Run self-test";
 byId("runChainTest").textContent = T.selfTestRunChain || "Run self-test incl. test print";
 byId("toggleTest").textContent = T.selfTestShow || "Show report";
 byId("copyTest").textContent = T.selfTestCopy || "Copy report";
+byId("openTestText").textContent = T.selfTestOpenText || "Open report as plain text";
+byId("openTestText").onclick = function() { window.open("/api/diagnostics/report.txt", "_blank"); };
 byId("lblLog").textContent = T.jobLogTitle || "Job log";
 byId("toggleLog").textContent = T.jobLogShow || "Show job log";
 byId("copyLog").textContent = T.jobLogCopy || "Copy job log";
@@ -232,11 +273,14 @@ byId("adminSave").textContent = T.adminSave || "Save configuration";
 byId("adminRestart").textContent = T.adminRestart || "Restart service";
 byId("adminReload").textContent = T.adminReload || "Discard changes";
 byId("adminLockAgain").textContent = T.adminLock || "Lock";
+byId("lblDiscovery").textContent = T.adminDiscovery || "Printers with IPP support on the network";
+byId("scanPrinters").textContent = T.adminScan || "Search for printers";
+byId("usePrinter").textContent = T.adminUsePrinter || "Use the selected printer";
 
 function render(s) {
   var st = s.state;
   byId("state").textContent = (T.states && T.states[st]) ? T.states[st] : st;
-  byId("statusCard").className = "card " + (["PROCESSING","PRINTING"].includes(st) ? "busy" : (st === "WAITING_FOR_FLIP" ? "wait" : "idle"));
+  byId("statusCard").className = "card " + (["PROCESSING","PRINTING"].includes(st) ? "busy" : (["WAITING_FOR_FLIP","WAITING_FOR_PRINTER"].includes(st) ? "wait" : "idle"));
   byId("detail").textContent = s.detail || "";
   byId("file").textContent = s.filename || "-";
   byId("pages").textContent = s.pages ? s.pages + " p / " + s.sheets + " s" : "-";
@@ -504,9 +548,29 @@ function fieldInput(f) {
   return html + "</div>";
 }
 
+function renderDiscovery(d) {
+  d = d || {};
+  var list = d.printers || [];
+  var select = byId("printerFound");
+  var chosen = select.value;
+  select.innerHTML = list.map(function(p) {
+    return '<option value="' + p.host + '"' + (p.configured ? " selected" : "") + ">"
+         + (p.label || p.host) + "</option>";
+  }).join("");
+  if (chosen) select.value = chosen;
+  select.disabled = !list.length;
+  byId("usePrinter").disabled = !list.length;
+  byId("scanPrinters").disabled = !!d.running;
+  byId("discoveryDetail").textContent = d.running
+      ? (T.adminScanning || "Searching the network for printers...")
+      : (list.length ? (d.detail || "") + (d.scanned ? " (" + d.scanned + ")" : "")
+                     : (T.adminNoPrinters || "No printer found yet - search for printers."));
+}
+
 function renderAdmin(a) {
   adminFields = a.fields || [];
   byId("adminFields").innerHTML = adminFields.map(fieldInput).join("");
+  renderDiscovery(a.discovery);
   var tag = byId("adminTag");
   tag.textContent = a.restart_required ? (T.adminRestartNeeded || "Restart required")
                                        : (T.adminSaved || "Saved");
@@ -559,6 +623,27 @@ byId("adminRestart").onclick = function() {
 byId("adminReload").onclick = function() {
   fetch(adminUrl("/api/admin/reload"), {method: "POST"})
     .then(function(r) { return r.json(); }).then(renderAdmin).catch(function(){});
+};
+byId("scanPrinters").onclick = function() {
+  byId("discoveryDetail").textContent = T.adminScanning || "Searching the network for printers...";
+  byId("scanPrinters").disabled = true;
+  fetch(adminUrl("/api/admin/discover"), {method: "POST"})
+    .then(function(r) { return r.json(); }).then(renderDiscovery).catch(function() {
+      byId("scanPrinters").disabled = false;
+    });
+};
+byId("usePrinter").onclick = function() {
+  var host = byId("printerFound").value;
+  if (!host) return;
+  fetch(adminUrl("/api/admin/use-printer"), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({host: host})
+  }).then(function(r) { return r.json(); }).then(function(result) {
+    askRestart(result);
+    fetch(adminUrl("/api/admin/config"), {cache: "no-store"})
+      .then(function(r) { return r.json(); }).then(renderAdmin).catch(function(){});
+  }).catch(function(){});
 };
 byId("adminLockAgain").onclick = function() {
   adminToken = "";
@@ -658,7 +743,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 "sheets": snapshot["sheets"],
                 "waiting_for_flip": snapshot["waiting_for_flip"],
                 "flip_owner": snapshot["flip_owner"],
-                "busy": snapshot["state"] in ("PROCESSING", "PRINTING", "WAITING_FOR_FLIP"),
+                "busy": snapshot["state"] in ("PROCESSING", "PRINTING", "WAITING_FOR_FLIP",
+                                             "WAITING_FOR_PRINTER"),
                 "effective_printer_name": snapshot["printer_name"] or eff_target["name"],
                 "flip_instruction": snapshot["flip_instruction"]
             }
@@ -685,6 +771,19 @@ class WebAppHandler(BaseHTTPRequestHandler):
         elif path == "/api/joblog":
             import job_log
             self.send_json(job_log.payload())
+        elif path == "/api/diagnostics/report.txt":
+            # The whole report as plain text: a page where 'select all, copy'
+            # works on any device, also where the browser refuses the clipboard
+            # API (plain HTTP) - so the report never has to be a screenshot.
+            import diagnostics
+            report = diagnostics.last_report or {}
+            text = report.get("markdown") or "No self-test has been run yet."
+            data = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         elif path == "/api/diagnostics":
             import diagnostics
             report = dict(diagnostics.last_report or {"result": "NONE"})
@@ -767,6 +866,22 @@ class WebAppHandler(BaseHTTPRequestHandler):
             if not self.admin_authorised(self.request_body()):
                 return
             self.send_json(admin.reload_config())
+            return
+        elif path == "/api/admin/discover":
+            import admin
+            import printer_discovery
+            if not self.admin_authorised(self.request_body()):
+                return
+            print("[Web] Search for printers requested by the administrator.")
+            admin.discover_printers()
+            self.send_json(printer_discovery.payload())
+            return
+        elif path == "/api/admin/use-printer":
+            import admin
+            body = self.request_body()
+            if not self.admin_authorised(body):
+                return
+            self.send_json(admin.use_printer(body.get("host")))
             return
         elif path == "/api/update/auto":
             import updater

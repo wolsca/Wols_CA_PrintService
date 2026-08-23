@@ -310,6 +310,13 @@ def phase_admin(d):
     d.info("Editable settings", "\n".join(f"{f['key']} = {admin.get_value(f['key'])}"
                                           for f in admin.FIELDS),
            f"{len(admin.FIELDS)} settings")
+    # The version of the file itself: an old file is upgraded step by step at
+    # start-up, so a version that stays behind means a migration failed.
+    d.check(f"Configuration version {config.config_version()}",
+            config.version_tuple(config.config_version())
+            >= config.version_tuple(config.CONFIG_VERSION),
+            f"the service writes version {config.CONFIG_VERSION}; a file without a "
+            f"'config_version' key is upgraded from 1.0 at start-up", optional=True)
     d.check("No restart pending", not admin.state["restart_required"],
             admin.state["last_result"] or "no configuration change waiting", optional=True)
     d.check(f"Configuration file {config.CONFIG_PATH} writable",
@@ -378,8 +385,14 @@ def run_ipptool(uri, request, timeout=45):
         return None, str(e)
 
 
-def check_ipp(d, uri):
-    """Asks the printer for its attributes, retrying without TLS on failure."""
+def check_ipp(d, uri, target=None, printer_off=False):
+    """Asks the printer for its attributes, retrying without TLS on failure.
+
+    With `printer_off` the printer is simply not on the network (switched off or
+    in deep sleep). That is a correct observation, not a broken installation, so
+    the step is a warning: the service waits for the printer instead of losing
+    the job.
+    """
     import printer_capabilities
     title = f"IPP get-printer-attributes on {uri}"
     if not shutil.which("ipptool"):
@@ -387,6 +400,13 @@ def check_ipp(d, uri):
                 optional=True)
         return
     request = printer_capabilities.request_file()
+    if printer_off:
+        _code, output = run_ipptool(uri, request, timeout=20)
+        d.check(title, False,
+                "the printer is switched off or asleep - a print job waits for it "
+                "instead of failing",
+                f"$ ipptool -t {uri} {request}\n{output}", optional=True)
+        return
     code, output = run_ipptool(uri, request)
     detail = f"exit code {code}" if code is not None else output
     if code == 0 and "PASS" in output:
@@ -438,8 +458,76 @@ def phase_printer(d):
     if not uri:
         d.check("hardware.printer_uri configured", False)
         return
+
+    # Is there a printer at all? A printer that is off or asleep answers on no
+    # port, and then everything after this is a consequence of that - reported
+    # as a warning with what the service does about it.
+    printer_off = False
+    if host_in_path or uri.startswith(("ipp://", "ipps://")):
+        import printer_power
+        awake, where = printer_power.reachable(target, uri)
+        d.check("Printer answers on the network", awake,
+                where if awake else f"no answer on {where} - switched off or asleep",
+                optional=True)
+        printer_off = not awake
+        explanation = [f"a job waits up to {printer_power.wait_seconds()} s for the printer "
+                       f"(hardware.wait_for_printer_seconds)"]
+
+        # The MAC address is the only thing a Wake-on-LAN packet carries, so it
+        # is read from the network while the printer is awake and compared with
+        # the configuration - a printer that was replaced or moved to Wi-Fi has
+        # a different address, and a packet to the old one wakes nothing.
+        status, mac_detail = printer_power.verify_mac(target, uri)
+        titles = {
+            "ok": "Printer MAC address verified",
+            "switched": "Printer MAC address switched to the other interface",
+            "detected": "Printer MAC address detected and saved",
+            "corrected": "Printer MAC address corrected",
+            "unexpected": "Another MAC address than configured - has the printer changed?",
+            "unknown": "Printer MAC address unknown",
+            "offline": "Printer MAC address not verifiable",
+        }
+        d.check(titles.get(status, "Printer MAC address"),
+                status in ("ok", "switched", "detected", "corrected"),
+                mac_detail, optional=True)
+        explanation.append(mac_detail)
+
+        # Three addresses: what is on the printer for cable and Wi-Fi, and the
+        # one that answers now. Both are needed to survive a move between the
+        # two and to find the printer back after its DHCP address changed.
+        d.info("Printer MAC addresses",
+               detail=f"in use {printer_power.printer_mac() or 'unknown'}",
+               output=(f"hardware.printer_mac (in use) = "
+                       f"{printer_power.printer_mac() or '-'}\n"
+                       f"hardware.printer_mac_wired    = "
+                       f"{printer_power.wired_mac() or '- (read it from the printer)'}\n"
+                       f"hardware.printer_mac_wifi     = "
+                       f"{printer_power.wifi_mac() or '- (read it from the printer)'}\n"
+                       f"Looking the printer up by MAC address is "
+                       f"{'on' if printer_power.recovery_enabled() else 'off'} "
+                       f"(hardware.recover_printer_ip): a printer with a DHCP address that "
+                       f"is not reserved gets another IP address after a long power-off, "
+                       f"and only the MAC address stays the same.\n"
+                       f"Printing on an unknown MAC address is "
+                       f"{'blocked' if printer_power.block_on_mac_change() else 'allowed'} "
+                       f"(hardware.block_on_mac_change): an IP address does not say which "
+                       f"machine answers on it, so a job would otherwise be printed on a "
+                       f"device that is not this printer."))
+        if printer_off:
+            found, recover_detail = printer_power.recover_address(target, uri)
+            d.check("Printer found again by its MAC address", bool(found),
+                    recover_detail, optional=True)
+        if not printer_power.printer_mac():
+            explanation.append(
+                "hardware.printer_mac is empty: a Wake-on-LAN packet is addressed to the "
+                "MAC address of the printer (an IP address cannot be used for it), so "
+                "without it the service can only wait until the printer is switched on. "
+                "Run 'ip neigh show' while the printer is awake, or read the address from "
+                "the network page of the printer itself.")
+        d.info("Waking the printer", detail=printer_power.describe(target),
+               output="\n".join(explanation))
     if uri.startswith(("ipp://", "ipps://")):
-        check_ipp(d, uri)
+        check_ipp(d, uri, target, printer_off)
     else:
         # A socket or file backend (for example the virtual printer of the test
         # container) does not speak IPP, so there is nothing to query.
@@ -489,6 +577,16 @@ def phase_network(d):
 
     d.command(["avahi-browse", "-rt", "_ipp._tcp"], "IPP services announced over mDNS",
               timeout=20, optional=True)
+
+    # Which printers could be chosen at all: the same list the administrator
+    # gets in the web app, so a wrong or vanished printer address is visible
+    # here next to the alternatives.
+    import printer_discovery
+    found = printer_discovery.discover()
+    d.check("Printers with IPP support found", bool(found),
+            printer_discovery.state["detail"], optional=True,
+            output="\n".join(f"{p['label']} [{p['source']}]" for p in found)
+                   or "nothing answered on port 631 and nothing announced itself over mDNS")
     d.command(["ss", "-ltnp"], "Listening TCP sockets", optional=True)
 
 
